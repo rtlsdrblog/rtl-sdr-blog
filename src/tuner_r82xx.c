@@ -1103,10 +1103,10 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	int rc = -1;
 
 	// CARL, automatically upconvert to 28.8 MHz if we tune to HF
-	uint32_t upconvert_freq;
+	uint32_t upconvert_freq = freq;
 	if (freq < MHZ(28.8))
 	{
-		upconvert_freq = freq + MHZ(28.8);
+		upconvert_freq = upconvert_freq + MHZ(28.8);
 	}
 
 	uint32_t lo_freq = upconvert_freq + priv->int_freq;
