@@ -1097,11 +1097,21 @@ int r82xx_set_bandwidth(struct r82xx_priv *priv, int bw, uint32_t rate)
 #undef FILT_HP_BW1
 #undef FILT_HP_BW2
 
+// Changes to support new r828d dongle versions
 int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 {
 	int rc = -1;
-	uint32_t lo_freq = freq + priv->int_freq;
+
+	// CARL, automatically upconvert to 28.8 MHz if we tune to HF
+	uint32_t upconvert_freq;
+	if (freq < MHZ(28.8))
+	{
+		upconvert_freq = freq + MHZ(28.8);
+	}
+
+	uint32_t lo_freq = upconvert_freq + priv->int_freq;
 	uint8_t air_cable1_in;
+	uint8_t cable2_in;
 
 	rc = r82xx_set_mux(priv, lo_freq);
 	if (rc < 0)
@@ -1111,16 +1121,82 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	if (rc < 0 || !priv->has_lock)
 		goto err;
 
+	// HF -> Cable_2
+	// VHF -> Cable_1
+	// UHF -> Air_in
+
 	/* switch between 'Cable1' and 'Air-In' inputs on sticks with
 	 * R828D tuner. We switch at 345 MHz, because that's where the
 	 * noise-floor has about the same level with identical LNA
-	 * settings. The original driver used 320 MHz. */
-	air_cable1_in = (freq > MHZ(345)) ? 0x00 : 0x60;
+	 * settings. The original driver used 320 MHz. - Modded to switch at 400 MHz */
 
-	if ((priv->cfg->rafael_chip == CHIP_R828D) &&
-	    (air_cable1_in != priv->input)) {
-		priv->input = air_cable1_in;
-		rc = r82xx_write_reg_mask(priv, 0x05, air_cable1_in, 0x60);
+
+	int band;
+	if (freq <= MHZ(28.8))
+	{
+		band = 0x10; // HF
+	}
+	else if (freq > MHZ(28.8) && freq < MHZ(400))
+	{
+		band = 0x20;
+	}
+	else
+	{
+		band = 0x30;
+	}
+
+
+	if ((priv->cfg->rafael_chip == CHIP_R828D) && (band != priv->input))
+	{
+
+		priv->input = band;
+
+		if (freq > MHZ(400))
+		{
+			//Turn air_in LNA ON
+			rc = r82xx_write_reg_mask(priv, 0x05, 0x00, 0x20);
+		}
+		else
+		{
+			// Otherwise turn it off to save power (as it uses a lot of power)
+			rc = r82xx_write_reg_mask(priv, 0x05, 0x20, 0x20);
+		}
+
+		// Turn LT OFF to save power
+		rc = r82xx_write_reg_mask(priv, 0x05, 0x80, 0x80);
+
+
+		// Turn open_d off
+		//rc = r82xx_write_reg_mask(priv, 0x17, 0x00, 0x08);
+
+		// VHF
+		// Activate Cable_1 input between 28.8 -> 400 MHz.
+		if (freq > MHZ(28.8) && freq < MHZ(400))
+		{
+			rc = r82xx_write_reg_mask(priv, 0x05, 0x40, 0x40);
+			// Appears to enhance Cable 1 input by 2dB
+			rc = r82xx_write_reg_mask(priv, 0x06, 0x04, 0x04);
+		}
+		else
+		{
+			rc = r82xx_write_reg_mask(priv, 0x05, 0x00, 0x40);
+			// Appears to enhance Cable 1 input by 2dB (off)
+			rc = r82xx_write_reg_mask(priv, 0x06, 0x00, 0x04);
+		}
+
+
+		//HF
+		if (freq < MHZ(28.8))
+		{
+			// Switch in Cable 2
+			rc = r82xx_write_reg_mask(priv, 0x06, 0x08, 0x08);
+		}
+		else
+		{
+			// Switch out Cable 2
+			rc = r82xx_write_reg_mask(priv, 0x06, 0x00, 0x08);
+		}
+
 	}
 
 err:
