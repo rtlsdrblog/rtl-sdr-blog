@@ -33,6 +33,10 @@
 #define MHZ(x)		((x)*1000*1000)
 #define KHZ(x)		((x)*1000)
 
+#define HF 0x10
+#define VHF 0x20
+#define UHF 0x30
+
 /*
  * Static constants
  */
@@ -1102,7 +1106,7 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 {
 	int rc = -1;
 
-	// CARL, automatically upconvert to 28.8 MHz if we tune to HF
+	// Automatically upconvert to 28.8 MHz if we tune to HF so we don't need to set any upconvert offset in the SDR software
 	uint32_t upconvert_freq = freq;
 	if (freq < MHZ(28.8))
 	{
@@ -1121,6 +1125,21 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	if (rc < 0 || !priv->has_lock)
 		goto err;
 
+
+	// Set open_d notches automatically
+	if (freq <= MHZ(2.2) 
+		|| (freq >= MHZ(85) && freq <= MHZ(112)) // Notch off until 112 because of roll off
+		|| (freq >= MHZ(172) && freq <= MHZ(242)))
+	{
+		rc = r82xx_write_reg_mask(priv, 0x17, 0x00, 0x08); // open_d hi_z (notches off)
+	}
+	else
+	{
+		rc = r82xx_write_reg_mask(priv, 0x17, 0x08, 0x08); // open_d low_z (notches on)
+	}
+	if (rc < 0)
+		goto err;
+
 	// HF -> Cable_2
 	// VHF -> Cable_1
 	// UHF -> Air_in
@@ -1128,65 +1147,40 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	/* switch between 'Cable1' and 'Air-In' inputs on sticks with
 	 * R828D tuner. We switch at 345 MHz, because that's where the
 	 * noise-floor has about the same level with identical LNA
-	 * settings. The original driver used 320 MHz. - Modded to switch at 400 MHz */
+	 * settings. The original driver used 320 MHz. - Modded to switch at 300 MHz */
 
 
-	int band;
+	// Only switch if there is a band change (to avoid excessive register writes when tuning rapidly)
+	int band = 0x00;
 	if (freq <= MHZ(28.8))
 	{
-		band = 0x10; // HF
+		band = HF; // HF
 	}
-	else if (freq > MHZ(28.8) && freq < MHZ(400))
+	else if (freq > MHZ(28.8) && freq < MHZ(300)) // VHF Tuner Input
 	{
-		band = 0x20;
+		band = VHF;
 	}
-	else
+	else // UHF Tuner Input
 	{
-		band = 0x30;
+		band = UHF;
 	}
 
 
 	if ((priv->cfg->rafael_chip == CHIP_R828D) && (band != priv->input))
 	{
-
 		priv->input = band;
-
-		if (freq > MHZ(400))
-		{
-			//Turn air_in LNA ON
-			rc = r82xx_write_reg_mask(priv, 0x05, 0x00, 0x20);
-		}
-		else
-		{
-			// Otherwise turn it off to save power (as it uses a lot of power)
-			rc = r82xx_write_reg_mask(priv, 0x05, 0x20, 0x20);
-		}
 
 		// Turn LT OFF to save power
 		rc = r82xx_write_reg_mask(priv, 0x05, 0x80, 0x80);
-
+		if (rc < 0)
+			goto err;
 
 		// Turn open_d off
 		//rc = r82xx_write_reg_mask(priv, 0x17, 0x00, 0x08);
 
-		// VHF
-		// Activate Cable_1 input between 28.8 -> 400 MHz.
-		if (freq > MHZ(28.8) && freq < MHZ(400))
-		{
-			rc = r82xx_write_reg_mask(priv, 0x05, 0x40, 0x40);
-			// Appears to enhance Cable 1 input by 2dB
-			rc = r82xx_write_reg_mask(priv, 0x06, 0x04, 0x04);
-		}
-		else
-		{
-			rc = r82xx_write_reg_mask(priv, 0x05, 0x00, 0x40);
-			// Appears to enhance Cable 1 input by 2dB (off)
-			rc = r82xx_write_reg_mask(priv, 0x06, 0x00, 0x04);
-		}
-
 
 		//HF
-		if (freq < MHZ(28.8))
+		if (band == HF) //(freq < MHZ(28.8))
 		{
 			// Switch in Cable 2
 			rc = r82xx_write_reg_mask(priv, 0x06, 0x08, 0x08);
@@ -1197,6 +1191,34 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 			rc = r82xx_write_reg_mask(priv, 0x06, 0x00, 0x08);
 		}
 
+		// VHF
+		// Activate Cable_1 input between 28.8 -> 400 MHz.
+		if (band == VHF)
+		{
+			rc = r82xx_write_reg_mask(priv, 0x05, 0x40, 0x40);
+			// This register setting appears to enhance Cable 1 input by 2dB
+			rc = r82xx_write_reg_mask(priv, 0x06, 0x04, 0x04);
+		}
+		else
+		{
+			rc = r82xx_write_reg_mask(priv, 0x05, 0x00, 0x40);
+			// Turn off the Cable_1 enhancement (off)
+			rc = r82xx_write_reg_mask(priv, 0x06, 0x00, 0x04);
+		}
+
+		if (band == UHF)
+		{
+			//Turn air_in LNA ON
+			rc = r82xx_write_reg_mask(priv, 0x05, 0x00, 0x20);
+		}
+		else
+		{
+			// Otherwise turn it off to save power (as it uses a lot of power)
+			rc = r82xx_write_reg_mask(priv, 0x05, 0x20, 0x20);
+		}
+
+		if (rc < 0)
+			goto err;
 	}
 
 err:
