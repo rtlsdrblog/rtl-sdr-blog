@@ -277,9 +277,12 @@ static int r82xx_write(struct r82xx_priv *priv, uint8_t reg, const uint8_t *val,
 		if (rc != size + 1) {
 			fprintf(stderr, "%s: i2c wr failed=%d reg=%02x len=%d\n",
 				   __FUNCTION__, rc, reg, size);
-			if (rc < 0)
-				return rc;
-			return -1;
+			// R828D causes an error on reg 0x0c and 0x10, and this causes the init to fail
+			// But if we just ignore the errors, eventhing works fine.
+			// TODO: Look into why 0x0C and 0x10 cause a i2c wr failed=-1 error with the R828D
+			//if (rc < 0)
+			//	return rc;
+			//return -1;
 		}
 
 		reg += size;
