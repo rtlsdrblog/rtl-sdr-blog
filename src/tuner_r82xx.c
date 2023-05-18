@@ -33,9 +33,12 @@
 #define MHZ(x)		((x)*1000*1000)
 #define KHZ(x)		((x)*1000)
 
-#define HF 0x10
-#define VHF 0x20
-#define UHF 0x30
+#define HF 1
+#define VHF 2
+#define UHF 3
+
+#define NOTCH_FILTERS_OFF 100
+#define NOTCH_FILTERS_ON 200
 
 /*
  * Static constants
@@ -959,10 +962,12 @@ static const int r82xx_mixer_gain_steps[]  = {
 int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 {
 	int rc;
+	priv->gain = gain;
+	priv->gain_manual_mode = set_manual_gain;
 
 	if (set_manual_gain) {
 		int i, total_gain = 0;
-		uint8_t mix_index = 0, lna_index = 0;
+		uint8_t mix_index = 0, lna_index = 0, vga_index = 0;
 		uint8_t data[4];
 
 		/* LNA auto off */
@@ -970,7 +975,7 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 		if (rc < 0)
 			return rc;
 
-		 /* Mixer auto off */
+		/* Mixer auto off */
 		rc = r82xx_write_reg_mask(priv, 0x07, 0, 0x10);
 		if (rc < 0)
 			return rc;
@@ -980,24 +985,40 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 			return rc;
 
 		/* set fixed VGA gain for now (16.3 dB) */
+		//rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f);
 		rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f); //init val 0x08 0x0c works well at 1.7
+
 		if (rc < 0)
 			return rc;
 
-		for (i = 0; i < 15; i++) {
-			if (total_gain >= gain)
-				break;
-
-			total_gain += r82xx_lna_gain_steps[++lna_index];
-
-			if (total_gain >= gain)
-				break;
-
-			total_gain += r82xx_mixer_gain_steps[++mix_index];
+		if (priv->gain_sensitivity_mode)
+		{
+			mix_index = (int)(gain / 33);
+			lna_index = 15;
 		}
+		else
+		{
+			for (i = 0; i < 15; i++) {
+				if (total_gain >= gain)
+					break;
+
+				total_gain += r82xx_lna_gain_steps[++lna_index];
+				//total_gain += r82xx_vga_gain_steps[++vga_index];
+
+				if (total_gain >= gain)
+					break;
+
+				total_gain += r82xx_mixer_gain_steps[++mix_index];
+			}
+		}
+
+		fprintf(stdout, "Gain: %i", gain);
+		fprintf(stdout, "Mix Index: %i", mix_index);
+		fprintf(stdout, "LNA Index: %i", lna_index);
 
 		/* set LNA gain */
 		rc = r82xx_write_reg_mask(priv, 0x05, lna_index, 0x0f);
+		//rc = r82xx_write_reg_mask(priv, 0x05, 0x0f, 0x0f);
 		if (rc < 0)
 			return rc;
 
@@ -1005,7 +1026,8 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 		rc = r82xx_write_reg_mask(priv, 0x07, mix_index, 0x0f);
 		if (rc < 0)
 			return rc;
-	} else {
+	}
+	else {
 		/* LNA */
 		rc = r82xx_write_reg_mask(priv, 0x05, 0, 0x10);
 		if (rc < 0)
@@ -1101,21 +1123,39 @@ int r82xx_set_bandwidth(struct r82xx_priv *priv, int bw, uint32_t rate)
 #undef FILT_HP_BW1
 #undef FILT_HP_BW2
 
-// Changes to support new r828d dongle versions
+int sensitivity_mode_toggle(struct r82xx_priv *priv, int toggle)
+{
+	int rc;
+
+	if (toggle)
+	{
+		//fprintf(stdout, "TOGGLE ON");
+		priv->gain_sensitivity_mode = 1;
+		r82xx_set_gain(priv, priv->gain_manual_mode, priv->gain);
+		//rc = r82xx_write_reg_mask(priv, 0x06, 0x10, 0x10);
+	}
+	else
+	{
+		priv->gain_sensitivity_mode = 0;
+		//fprintf(stdout, "TOGGLE OFF");
+		r82xx_set_gain(priv, priv->gain_manual_mode, priv->gain);
+		//rc = r82xx_write_reg_mask(priv, 0x06, 0x00, 0x10);
+	}
+
+	return rc;
+}
+
 int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 {
 	int rc = -1;
+	int is_rtlsdr_blog_v4 = rtlsdr_check_dongle_model(priv->rtl_dev, "RTLSDRBlog", "Blog V4");
 
-	// Automatically upconvert to 28.8 MHz if we tune to HF so we don't need to set any upconvert offset in the SDR software
-	uint32_t upconvert_freq = freq;
-	if (freq < MHZ(28.8))
-	{
-		upconvert_freq = upconvert_freq + MHZ(28.8);
-	}
+	/* if it's an RTL-SDR Blog V4, automatically upconvert by 28.8 MHz if we tune to HF
+	 * so that we don't need to manually set any upconvert offset in the SDR software */
+	uint32_t upconvert_freq = is_rtlsdr_blog_v4 ? ((freq < MHZ(28.8)) ? (freq + MHZ(28.8)) : freq) : freq;
 
 	uint32_t lo_freq = upconvert_freq + priv->int_freq;
 	uint8_t air_cable1_in;
-	uint8_t cable2_in;
 
 	rc = r82xx_set_mux(priv, lo_freq);
 	if (rc < 0)
@@ -1125,101 +1165,63 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	if (rc < 0 || !priv->has_lock)
 		goto err;
 
-
-	// Set open_d notches automatically
-	if (freq <= MHZ(2.2) 
-		|| (freq >= MHZ(85) && freq <= MHZ(112)) // Notch off until 112 because of roll off
-		|| (freq >= MHZ(172) && freq <= MHZ(242)))
+	if (is_rtlsdr_blog_v4)
 	{
-		rc = r82xx_write_reg_mask(priv, 0x17, 0x00, 0x08); // open_d hi_z (notches off)
-	}
-	else
-	{
-		rc = r82xx_write_reg_mask(priv, 0x17, 0x08, 0x08); // open_d low_z (notches on)
-	}
-	if (rc < 0)
-		goto err;
-
-	// HF -> Cable_2
-	// VHF -> Cable_1
-	// UHF -> Air_in
-
-	/* switch between 'Cable1' and 'Air-In' inputs on sticks with
-	 * R828D tuner. We switch at 345 MHz, because that's where the
-	 * noise-floor has about the same level with identical LNA
-	 * settings. The original driver used 320 MHz. - Modded to switch at 300 MHz */
-
-
-	// Only switch if there is a band change (to avoid excessive register writes when tuning rapidly)
-	int band = 0x00;
-	if (freq <= MHZ(28.8))
-	{
-		band = HF; // HF
-	}
-	else if (freq > MHZ(28.8) && freq < MHZ(300)) // VHF Tuner Input
-	{
-		band = VHF;
-	}
-	else // UHF Tuner Input
-	{
-		band = UHF;
-	}
-
-
-	if ((priv->cfg->rafael_chip == CHIP_R828D) && (band != priv->input))
-	{
-		priv->input = band;
-
-		// Turn LT OFF to save power
-		rc = r82xx_write_reg_mask(priv, 0x05, 0x80, 0x80);
-		if (rc < 0)
-			goto err;
-
-		// Turn open_d off
-		//rc = r82xx_write_reg_mask(priv, 0x17, 0x00, 0x08);
-
-
-		//HF
-		if (band == HF) //(freq < MHZ(28.8))
-		{
-			// Switch in Cable 2
-			rc = r82xx_write_reg_mask(priv, 0x06, 0x08, 0x08);
-		}
-		else
-		{
-			// Switch out Cable 2
-			rc = r82xx_write_reg_mask(priv, 0x06, 0x00, 0x08);
-		}
-
-		// VHF
-		// Activate Cable_1 input between 28.8 -> 400 MHz.
-		if (band == VHF)
-		{
-			rc = r82xx_write_reg_mask(priv, 0x05, 0x40, 0x40);
-			// This register setting appears to enhance Cable 1 input by 2dB
-			rc = r82xx_write_reg_mask(priv, 0x06, 0x04, 0x04);
-		}
-		else
-		{
-			rc = r82xx_write_reg_mask(priv, 0x05, 0x00, 0x40);
-			// Turn off the Cable_1 enhancement (off)
-			rc = r82xx_write_reg_mask(priv, 0x06, 0x00, 0x04);
-		}
-
-		if (band == UHF)
-		{
-			//Turn air_in LNA ON
-			rc = r82xx_write_reg_mask(priv, 0x05, 0x00, 0x20);
-		}
-		else
-		{
-			// Otherwise turn it off to save power (as it uses a lot of power)
-			rc = r82xx_write_reg_mask(priv, 0x05, 0x20, 0x20);
-		}
+		/* determine if notch filters should be on or off
+		 * notches are turned OFF when tuned within the notch band
+		 * and ON when tuned outside the notch band.
+		 */
+		uint8_t open_d = (freq <= MHZ(2.2) || (freq >= MHZ(85) && freq <= MHZ(112)) || (freq >= MHZ(172) && freq <= MHZ(242))) ? 0x00 : 0x08;
+		rc = r82xx_write_reg_mask(priv, 0x17, open_d, 0x08);
 
 		if (rc < 0)
-			goto err;
+			return rc;
+
+		/* select tuner band based on frequency
+		 * and only switch if there is a band change
+		 *(to avoid excessive register writes when tuning rapidly) */
+		uint8_t band = (freq <= MHZ(28.8)) ? HF : ((freq > MHZ(28.8) && freq < MHZ(300)) ? VHF : UHF);
+
+		/* switch between tuner inputs on the RTL-SDR Blog V4 */
+		if (band != priv->input)
+		{
+			priv->input = band;
+
+			/* activate cable 2 (HF input) */
+			uint8_t cable_2_in = (band == HF) ? 0x08 : 0x00;
+			rc = r82xx_write_reg_mask(priv, 0x06, cable_2_in, 0x08);
+
+			/* activate cable 1 (VHF input) */
+			uint8_t cable_1_in = (band == VHF) ? 0x40 : 0x00;
+			rc = r82xx_write_reg_mask(priv, 0x05, cable_1_in, 0x40);
+
+			/* this register appears to boost cable 1 SNR slightly */
+			//uint8_t cable_1_enhance = (band == VHF) ? 0x04 : 0x00;
+			//rc = r82xx_write_reg_mask(priv, 0x06, cable_1_enhance, 0x04);
+
+			/* activate air_in (UHF input) */
+			uint8_t air_in = (band == UHF) ? 0x00 : 0x20;
+			rc = r82xx_write_reg_mask(priv, 0x05, air_in, 0x20);
+
+			if (rc < 0)
+				goto err;
+		}
 	}
+	else /* Standard R828D dongle*/
+	{
+		/* switch between 'Cable1' and 'Air-In' inputs on sticks with
+		* R828D tuner. We switch at 345 MHz, because that's where the
+		* noise-floor has about the same level with identical LNA
+		* settings. The original driver used 320 MHz. */
+		air_cable1_in = (freq > MHZ(345)) ? 0x00 : 0x60;
+
+		if ((priv->cfg->rafael_chip == CHIP_R828D) &&
+			(air_cable1_in != priv->input)) {
+			priv->input = air_cable1_in;
+			rc = r82xx_write_reg_mask(priv, 0x05, air_cable1_in, 0x60);
+		}
+	}
+
 
 err:
 	if (rc < 0)
