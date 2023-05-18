@@ -1603,6 +1603,9 @@ int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)
 	rtlsdr_init_baseband(dev);
 	dev->dev_lost = 0;
 
+	/* Get device manufacturer and product id */
+	r = rtlsdr_get_usb_strings(dev, dev->manufact, dev->product, NULL);
+
 	/* Probe tuners */
 	rtlsdr_set_i2c_repeater(dev, 1);
 
@@ -1672,6 +1675,7 @@ found:
 		// If NOT an RTL-SDR Blog V4, set typical R828D 16 MHz freq. Otherwise, keep at 28.8 MHz.
 		if (!(rtlsdr_check_dongle_model(dev, "RTLSDRBlog", "Blog V4")))
 		{
+			fprintf(stdout, "setting 16mhz");
 			dev->tun_xtal = R828D_XTAL_FREQ;
 		}
 		/* fall-through */
