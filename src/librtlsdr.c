@@ -1193,6 +1193,7 @@ uint32_t rtlsdr_get_sample_rate(rtlsdr_dev_t *dev)
 	return dev->rate;
 }
 
+/* Used to test any register setting with a toggle */
 int rtlsdr_set_testmode(rtlsdr_dev_t *dev, int on)
 {
 	if (!dev)
@@ -1209,13 +1210,14 @@ int rtlsdr_set_agc_mode(rtlsdr_dev_t *dev, int on)
 	/* testing:
 	 * replaceme the useless RTL AGC function with a function that
 	   implements max LNA gain for sensitivity when on */
-	rtlsdr_set_i2c_repeater(dev, 1);
-	sensitivity_mode_toggle(&dev->r82xx_p, on);
-	rtlsdr_set_i2c_repeater(dev, 0);
+	//rtlsdr_set_i2c_repeater(dev, 1);
+	//sensitivity_mode_toggle(&dev->r82xx_p, on);
+	//notch_toggle(&dev->r82xx_p, on);
+	//rtlsdr_set_i2c_repeater(dev, 0);
 
-	return 0;
+	//return 0;
 
-	//return rtlsdr_demod_write_reg(dev, 0, 0x19, on ? 0x25 : 0x05, 1);
+	return rtlsdr_demod_write_reg(dev, 0, 0x19, on ? 0x25 : 0x05, 1);
 }
 
 int rtlsdr_set_direct_sampling(rtlsdr_dev_t *dev, int on)

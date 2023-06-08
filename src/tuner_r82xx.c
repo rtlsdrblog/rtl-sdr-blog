@@ -377,9 +377,9 @@ static int r82xx_set_mux(struct r82xx_priv *priv, uint32_t freq)
 	range = &freq_ranges[i];
 
 	/* Open Drain */
-	rc = r82xx_write_reg_mask(priv, 0x17, range->open_d, 0x08);
-	if (rc < 0)
-		return rc;
+	//rc = r82xx_write_reg_mask(priv, 0x17, range->open_d, 0x08);
+	//if (rc < 0)
+	//	return rc;
 
 	/* RF_MUX,Polymux */
 	rc = r82xx_write_reg_mask(priv, 0x1a, range->rf_mux_ploy, 0xc3);
@@ -677,7 +677,7 @@ static int r82xx_sysfreq_sel(struct r82xx_priv *priv, uint32_t freq,
 		return rc;
 	
 	// RTLSDRBLOG. Improve L-band performance by setting PLL drop out to 2.0v
-        div_buf_cur = 0xa0;
+    div_buf_cur = 0xa0;
 	rc = r82xx_write_reg_mask(priv, 0x17, div_buf_cur, 0x30);
 	if (rc < 0)
 		return rc;
@@ -1145,6 +1145,24 @@ int sensitivity_mode_toggle(struct r82xx_priv *priv, int toggle)
 	return rc;
 }
 
+int notch_toggle(struct r82xx_priv *priv, int toggle)
+{
+	int rc;
+
+	if (toggle)
+	{
+		//fprintf(stdout, "TOGGLE ON");
+		rc = r82xx_write_reg_mask(priv, 0x17, 0x08, 0x08);
+	}
+	else
+	{
+		//fprintf(stdout, "TOGGLE OFF");
+		rc = r82xx_write_reg_mask(priv, 0x17, 0x00, 0x08);
+	}
+
+	return rc;
+}
+
 int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 {
 	int rc = -1;
@@ -1180,7 +1198,7 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 		/* select tuner band based on frequency
 		 * and only switch if there is a band change
 		 *(to avoid excessive register writes when tuning rapidly) */
-		uint8_t band = (freq <= MHZ(28.8)) ? HF : ((freq > MHZ(28.8) && freq < MHZ(300)) ? VHF : UHF);
+		uint8_t band = (freq <= MHZ(28.8)) ? HF : ((freq > MHZ(28.8) && freq < MHZ(250)) ? VHF : UHF);
 
 		/* switch between tuner inputs on the RTL-SDR Blog V4 */
 		if (band != priv->input)
