@@ -1131,14 +1131,14 @@ int sensitivity_mode_toggle(struct r82xx_priv *priv, int toggle)
 	{
 		//fprintf(stdout, "TOGGLE ON");
 		priv->gain_sensitivity_mode = 1;
-		r82xx_set_gain(priv, priv->gain_manual_mode, priv->gain);
+		rc = r82xx_set_gain(priv, priv->gain_manual_mode, priv->gain);
 		//rc = r82xx_write_reg_mask(priv, 0x06, 0x10, 0x10);
 	}
 	else
 	{
 		priv->gain_sensitivity_mode = 0;
 		//fprintf(stdout, "TOGGLE OFF");
-		r82xx_set_gain(priv, priv->gain_manual_mode, priv->gain);
+		rc = r82xx_set_gain(priv, priv->gain_manual_mode, priv->gain);
 		//rc = r82xx_write_reg_mask(priv, 0x06, 0x00, 0x10);
 	}
 
@@ -1166,14 +1166,22 @@ int notch_toggle(struct r82xx_priv *priv, int toggle)
 int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 {
 	int rc = -1;
-	int is_rtlsdr_blog_v4 = rtlsdr_check_dongle_model(priv->rtl_dev, "RTLSDRBlog", "Blog V4");
+	int is_rtlsdr_blog_v4;
+	uint32_t upconvert_freq;
+	uint32_t lo_freq;
+	uint8_t air_cable1_in;
+	uint8_t open_d;
+	uint8_t band;
+	uint8_t cable_2_in;
+	uint8_t cable_1_in;
+	uint8_t air_in;
+
+	is_rtlsdr_blog_v4 = rtlsdr_check_dongle_model(priv->rtl_dev, "RTLSDRBlog", "Blog V4");
 
 	/* if it's an RTL-SDR Blog V4, automatically upconvert by 28.8 MHz if we tune to HF
 	 * so that we don't need to manually set any upconvert offset in the SDR software */
-	uint32_t upconvert_freq = is_rtlsdr_blog_v4 ? ((freq < MHZ(28.8)) ? (freq + MHZ(28.8)) : freq) : freq;
-
-	uint32_t lo_freq = upconvert_freq + priv->int_freq;
-	uint8_t air_cable1_in;
+	upconvert_freq = is_rtlsdr_blog_v4 ? ((freq < MHZ(28.8)) ? (freq + MHZ(28.8)) : freq) : freq;
+	lo_freq = upconvert_freq + priv->int_freq;
 
 	rc = r82xx_set_mux(priv, lo_freq);
 	if (rc < 0)
@@ -1189,7 +1197,7 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 		 * notches are turned OFF when tuned within the notch band
 		 * and ON when tuned outside the notch band.
 		 */
-		uint8_t open_d = (freq <= MHZ(2.2) || (freq >= MHZ(85) && freq <= MHZ(112)) || (freq >= MHZ(172) && freq <= MHZ(242))) ? 0x00 : 0x08;
+		open_d = (freq <= MHZ(2.2) || (freq >= MHZ(85) && freq <= MHZ(112)) || (freq >= MHZ(172) && freq <= MHZ(242))) ? 0x00 : 0x08;
 		rc = r82xx_write_reg_mask(priv, 0x17, open_d, 0x08);
 
 		if (rc < 0)
@@ -1198,7 +1206,7 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 		/* select tuner band based on frequency
 		 * and only switch if there is a band change
 		 *(to avoid excessive register writes when tuning rapidly) */
-		uint8_t band = (freq <= MHZ(28.8)) ? HF : ((freq > MHZ(28.8) && freq < MHZ(250)) ? VHF : UHF);
+		band = (freq <= MHZ(28.8)) ? HF : ((freq > MHZ(28.8) && freq < MHZ(250)) ? VHF : UHF);
 
 		/* switch between tuner inputs on the RTL-SDR Blog V4 */
 		if (band != priv->input)
@@ -1206,11 +1214,11 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 			priv->input = band;
 
 			/* activate cable 2 (HF input) */
-			uint8_t cable_2_in = (band == HF) ? 0x08 : 0x00;
+			cable_2_in = (band == HF) ? 0x08 : 0x00;
 			rc = r82xx_write_reg_mask(priv, 0x06, cable_2_in, 0x08);
 
 			/* activate cable 1 (VHF input) */
-			uint8_t cable_1_in = (band == VHF) ? 0x40 : 0x00;
+			cable_1_in = (band == VHF) ? 0x40 : 0x00;
 			rc = r82xx_write_reg_mask(priv, 0x05, cable_1_in, 0x40);
 
 			/* this register appears to boost cable 1 SNR slightly */
@@ -1218,7 +1226,7 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 			//rc = r82xx_write_reg_mask(priv, 0x06, cable_1_enhance, 0x04);
 
 			/* activate air_in (UHF input) */
-			uint8_t air_in = (band == UHF) ? 0x00 : 0x20;
+			air_in = (band == UHF) ? 0x00 : 0x20;
 			rc = r82xx_write_reg_mask(priv, 0x05, air_in, 0x20);
 
 			if (rc < 0)
