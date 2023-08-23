@@ -1675,9 +1675,7 @@ found:
 	switch (dev->tuner_type) {
 	case RTLSDR_TUNER_R828D:
 		// If NOT an RTL-SDR Blog V4, set typical R828D 16 MHz freq. Otherwise, keep at 28.8 MHz.
-		if (!(rtlsdr_check_dongle_model(dev, "RTLSDRBlog", "Blog V4")))
-		{
-			fprintf(stdout, "setting 16mhz");
+		if (!(rtlsdr_check_dongle_model(dev, "RTLSDRBlog", "Blog V4")))	{
 			dev->tun_xtal = R828D_XTAL_FREQ;
 		}
 		/* fall-through */
