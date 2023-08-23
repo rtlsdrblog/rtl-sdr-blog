@@ -488,7 +488,7 @@ int main(int argc, char **argv)
 #endif
 
 	/* Set direct sampling */
-        if (direct_sampling || frequency < 2800000) {
+        if (direct_sampling) {
                 verbose_direct_sampling(dev, 2);
         }
 
