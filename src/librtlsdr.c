@@ -125,7 +125,7 @@ struct rtlsdr_dev {
 
 void rtlsdr_set_gpio_bit(rtlsdr_dev_t *dev, uint8_t gpio, int val);
 static int rtlsdr_set_if_freq(rtlsdr_dev_t *dev, uint32_t freq);
-static int rtlsdr_update_ds(rtlsdr_dev_t *dev, uint32_t freq);
+static int rtlsdr_update_ds(rtlsdr_dev_t *dev, uint32_t freq, int new_ds);
 
 /* generic tuner interface functions, shall be moved to the tuner implementations */
 int e4000_init(void *dev) {
@@ -885,11 +885,18 @@ int rtlsdr_read_eeprom(rtlsdr_dev_t *dev, uint8_t *data, uint8_t offset, uint16_
 int rtlsdr_set_center_freq(rtlsdr_dev_t *dev, uint32_t freq)
 {
 	int r = -1;
+	int last_ds;
 
 	if (!dev || !dev->tuner)
 		return -1;
 
-	rtlsdr_update_ds(dev, freq);
+	/* Get the last direct sampling status */
+	last_ds = rtlsdr_get_direct_sampling(dev);
+	if (last_ds < 0)
+		return 1;
+
+	/* Check if direct sampling should be enabled */
+	dev->direct_sampling = (freq < 28800000 && dev->tuner_type == RTLSDR_TUNER_R820T)  ? 2 : 0;
 
 	if (dev->direct_sampling) {
 		r = rtlsdr_set_if_freq(dev, freq);
@@ -903,6 +910,13 @@ int rtlsdr_set_center_freq(rtlsdr_dev_t *dev, uint32_t freq)
 		dev->freq = freq;
 	else
 		dev->freq = 0;
+
+	/* Have to run this after dev->freq is updated to avoid setting
+	* the previous frequency back again
+	*/
+	if (last_ds != dev->direct_sampling) {
+		return rtlsdr_set_direct_sampling(dev, dev->direct_sampling);
+	}
 
 	return r;
 }
@@ -1228,9 +1242,9 @@ int rtlsdr_set_direct_sampling(rtlsdr_dev_t *dev, int on)
 	return r;
 }
 
-static int rtlsdr_update_ds(rtlsdr_dev_t *dev, uint32_t freq)
+/* Auto enable direct sampling if tuned below 28.8 MHz */
+static int rtlsdr_update_ds(rtlsdr_dev_t *dev, uint32_t freq, int new_ds)
 {
-	int new_ds;
 	int curr_ds;
 
         if (!dev)
@@ -1239,9 +1253,6 @@ static int rtlsdr_update_ds(rtlsdr_dev_t *dev, uint32_t freq)
 	curr_ds = rtlsdr_get_direct_sampling(dev);
 	if (curr_ds < 0)
 		return 1;
-
-	new_ds = freq < 28800000 ? 2 : 0;
-	dev->direct_sampling = new_ds;
 
 	if (curr_ds != new_ds) {
 		return rtlsdr_set_direct_sampling(dev, new_ds);
