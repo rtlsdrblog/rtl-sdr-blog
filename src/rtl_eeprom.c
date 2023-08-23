@@ -43,7 +43,7 @@ typedef struct rtlsdr_config {
 	char product[MAX_STR_SIZE];
 	char serial[MAX_STR_SIZE];
 	int have_serial;
-	int enable_ir;
+	int enable_bt;
 	int remote_wakeup;
 } rtlsdr_config_t;
 
@@ -57,8 +57,8 @@ void dump_config(rtlsdr_config_t *conf)
 	fprintf(stderr, "Serial number:\t\t%s\n", conf->serial);
 	fprintf(stderr, "Serial number enabled:\t");
 	fprintf(stderr, conf->have_serial ? "yes\n": "no\n");
-	fprintf(stderr, "IR endpoint enabled:\t");
-	fprintf(stderr, conf->enable_ir ? "yes\n": "no\n");
+	fprintf(stderr, "Bias Tee always on:\t");
+	fprintf(stderr, conf->enable_bt ? "no\n": "yes\n"); // 0 is ON for enable_bt
 	fprintf(stderr, "Remote wakeup enabled:\t");
 	fprintf(stderr, conf->remote_wakeup ? "yes\n": "no\n");
 	fprintf(stderr, "__________________________________________\n");
@@ -74,7 +74,7 @@ void usage(void)
 		"\t[-m <str> set manufacturer string]\n"
 		"\t[-p <str> set product string]\n"
 		"\t[-s <str> set serial number string]\n"
-		"\t[-i <0,1> disable/enable IR-endpoint]\n"
+		"\t[-b <0,1> disable/enable force bias tee always on (0: OFF, 1: ON)]\n"
 		"\t[-g <conf> generate default config and write to device]\n"
 		"\t[   <conf> can be one of:]\n"
 		"\t[   realtek\t\tRealtek default (as without EEPROM)]\n"
@@ -140,7 +140,7 @@ int parse_eeprom_to_conf(rtlsdr_config_t *conf, uint8_t *dat)
 	conf->product_id = dat[4] | (dat[5] << 8);
 	conf->have_serial = (dat[6] == 0xa5) ? 1 : 0;
 	conf->remote_wakeup = (dat[7] & 0x01) ? 1 : 0;
-	conf->enable_ir = (dat[7] & 0x02) ? 1 : 0;
+	conf->enable_bt = (dat[7] & 0x02) ? 1 : 0;
 
 	pos = get_string_descriptor(STR_OFFSET, dat, conf->manufacturer);
 	pos = get_string_descriptor(pos, dat, conf->product);
@@ -162,7 +162,7 @@ int gen_eeprom_from_conf(rtlsdr_config_t *conf, uint8_t *dat)
 	dat[6] = conf->have_serial ? 0xa5 : 0x00;
 	dat[7] = 0x14;
 	dat[7] |= conf->remote_wakeup ? 0x01 : 0x00;
-	dat[7] |= conf->enable_ir ? 0x02 : 0x00;
+	dat[7] |= conf->enable_bt ? 0x02 : 0x00;
 	dat[8] = 0x02;
 
 	pos = set_string_descriptor(STR_OFFSET, dat, conf->manufacturer);
@@ -194,7 +194,7 @@ void gen_default_conf(rtlsdr_config_t *conf, int config)
 		strcpy(conf->product, "RTL2832U DVB-T");
 		strcpy(conf->serial, "0");
 		conf->have_serial = 1;
-		conf->enable_ir = 0;
+		conf->enable_bt = 0;
 		conf->remote_wakeup = 1;
 		break;
 	case REALTEK_EEPROM:
@@ -205,7 +205,7 @@ void gen_default_conf(rtlsdr_config_t *conf, int config)
 		strcpy(conf->product, "RTL2838UHIDIR");
 		strcpy(conf->serial, "00000001");
 		conf->have_serial = 1;
-		conf->enable_ir = 1;
+		conf->enable_bt = 1;
 		conf->remote_wakeup = 0;
 		break;
 	case TERRATEC_NOXON:
@@ -216,7 +216,7 @@ void gen_default_conf(rtlsdr_config_t *conf, int config)
 		strcpy(conf->product, "DAB Stick");
 		strcpy(conf->serial, "0");
 		conf->have_serial = 1;
-		conf->enable_ir = 0;
+		conf->enable_bt = 0;
 		conf->remote_wakeup = 1;
 		break;
 	case TERRATEC_T_BLACK:
@@ -227,7 +227,7 @@ void gen_default_conf(rtlsdr_config_t *conf, int config)
 		strcpy(conf->product, "RTL2838UHIDIR");
 		strcpy(conf->serial, "00000001");
 		conf->have_serial = 1;
-		conf->enable_ir = 1;
+		conf->enable_bt = 1;
 		conf->remote_wakeup = 0;
 		break;
 	case TERRATEC_T_PLUS:
@@ -238,7 +238,7 @@ void gen_default_conf(rtlsdr_config_t *conf, int config)
 		strcpy(conf->product, "RTL2838UHIDIR");
 		strcpy(conf->serial, "00000001");
 		conf->have_serial = 1;
-		conf->enable_ir = 1;
+		conf->enable_bt = 1;
 		conf->remote_wakeup = 0;
 		break;
 	default:
@@ -261,10 +261,10 @@ int main(int argc, char **argv)
 	int flash_file = 0;
 	int default_config = 0;
 	int change = 0;
-	int ir_endpoint = 0;
+	int enable_bt = 0;
 	char ch;
 
-	while ((opt = getopt(argc, argv, "d:m:p:s:i:g:w:r:h?")) != -1) {
+	while ((opt = getopt(argc, argv, "d:m:p:s:b:g:w:r:h?")) != -1) {
 		switch (opt) {
 		case 'd':
 			dev_index = atoi(optarg);
@@ -281,8 +281,9 @@ int main(int argc, char **argv)
 			serial_str = optarg;
 			change = 1;
 			break;
-		case 'i':
-			ir_endpoint = (atoi(optarg) > 0) ? 1 : -1;
+		case 'b':
+			enable_bt = (atoi(optarg) > 0) ? -1 : 1;
+			//ir_endpoint = (atoi(optarg) > 0) ? 1 : -1;
 			change = 1;
 			break;
 		case 'g':
@@ -380,8 +381,8 @@ int main(int argc, char **argv)
 		strncpy((char*)&conf.serial, serial_str, MAX_STR_SIZE - 1);
 	}
 
-	if (ir_endpoint != 0)
-		 conf.enable_ir = (ir_endpoint > 0) ? 1 : 0;
+	if (enable_bt != 0)
+		 conf.enable_bt = (enable_bt > 0) ? 1 : 0;
 
 	if (!change)
 		goto exit;

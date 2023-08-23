@@ -121,6 +121,7 @@ struct rtlsdr_dev {
 	unsigned int xfer_errors;
 	char manufact[256];
 	char product[256];
+	int force_bt;
 };
 
 void rtlsdr_set_gpio_bit(rtlsdr_dev_t *dev, uint8_t gpio, int val);
@@ -365,6 +366,7 @@ static rtlsdr_dongle_t known_devices[] = {
 #define BULK_TIMEOUT	0
 
 #define EEPROM_ADDR	0xa0
+#define EEPROM_SIZE     256
 
 enum usb_reg {
 	USB_SYSCTL		= 0x2000,
@@ -1496,6 +1498,7 @@ int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)
 	struct libusb_device_descriptor dd;
 	uint8_t reg;
 	ssize_t cnt;
+	uint8_t buf[EEPROM_SIZE];
 
 	dev = malloc(sizeof(rtlsdr_dev_t));
 	if (NULL == dev)
@@ -1676,6 +1679,14 @@ found:
 	default:
 		break;
 	}
+
+	/* Hack to force the Bias T to always be on if we set the IR-Endpoint
+	* bit in the EEPROM to 0. Default on EEPROM is 1.
+	*/
+	r = rtlsdr_read_eeprom(dev, buf, 0, EEPROM_SIZE);
+	dev->force_bt = (buf[7] & 0x02) ? 0 : 1;
+	if(dev->force_bt)
+		rtlsdr_set_bias_tee(dev, 1);
 
 	if (dev->tuner->init)
 		r = dev->tuner->init(dev);
@@ -2075,6 +2086,12 @@ int rtlsdr_set_bias_tee_gpio(rtlsdr_dev_t *dev, int gpio, int on)
 {
 	if (!dev)
 		return -1;
+
+	/* If it's the bias tee GPIO, and force bias tee is on
+	* don't allow the bias tee to turn off. Prevents software
+	* that initializes with the bias tee off from turning it off */
+	if(gpio == 0 && dev->force_bt)
+		on = 1;
 
 	rtlsdr_set_gpio_output(dev, gpio);
 	rtlsdr_set_gpio_bit(dev, gpio, on);
