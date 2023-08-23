@@ -1242,8 +1242,15 @@ int rtlsdr_set_offset_tuning(rtlsdr_dev_t *dev, int on)
 		return -1;
 
 	if ((dev->tuner_type == RTLSDR_TUNER_R820T) ||
-	    (dev->tuner_type == RTLSDR_TUNER_R828D))
+	    (dev->tuner_type == RTLSDR_TUNER_R828D)) {
+		/* RTL-SDR-BLOG Hack, enables us to turn on the bias tee by
+		* clicking on "offset tuning" in software that doesn't have
+		* specified bias tee support. Offset tuning is not used for
+		*R820T devices so it is no problem.
+		*/
+		rtlsdr_set_gpio(dev, 0, on);
 		return -2;
+	}
 
 	if (dev->direct_sampling)
 		return -3;
