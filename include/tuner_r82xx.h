@@ -120,6 +120,4 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq);
 int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain);
 int r82xx_set_bandwidth(struct r82xx_priv *priv, int bandwidth,  uint32_t rate);
 
-int rtlsdr_check_dongle_model(void *dev, char* manufact_check, char* product_check);
-
 #endif
