@@ -1105,6 +1105,25 @@ int r82xx_set_bandwidth(struct r82xx_priv *priv, int bw, uint32_t rate)
 
 	return priv->int_freq;
 }
+
+int r82xx_toggle_test(struct r82xx_priv *priv, int toggle)
+{
+	int rc;
+
+	if (toggle)
+	{
+		fprintf(stderr, "TOGGLE ON \n");
+		rc = r82xx_write_reg_mask(priv, 0x17, 0x08, 0x08); /* open_d notch on */
+	}
+	else
+	{
+		fprintf(stderr, "TOGGLE OFF \n");
+		rc = r82xx_write_reg_mask(priv, 0x17, 0x00, 0x08); /* open_d notch off */
+	}
+
+	return rc;
+}
+
 #undef FILT_HP_BW1
 #undef FILT_HP_BW2
 

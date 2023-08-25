@@ -1177,6 +1177,16 @@ int rtlsdr_set_agc_mode(rtlsdr_dev_t *dev, int on)
 	if (!dev)
 		return -1;
 
+	/* FOR TESTING ONLY. Uncomment to enable repurposing the RTL AGC button
+	* for switching registers on/off. Uses to test functions of registers easily. */
+
+	/*
+	rtlsdr_set_i2c_repeater(dev, 1);
+	r82xx_toggle_test(&dev->r82xx_p, on);
+	rtlsdr_set_i2c_repeater(dev, 0);
+	return 0;
+	*/
+
 	return rtlsdr_demod_write_reg(dev, 0, 0x19, on ? 0x25 : 0x05, 1);
 }
 
