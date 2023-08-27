@@ -122,6 +122,7 @@ struct rtlsdr_dev {
 	char manufact[256];
 	char product[256];
 	int force_bt;
+	enum rtlsdr_ds_mode direct_sampling_mode;
 };
 
 void rtlsdr_set_gpio_bit(rtlsdr_dev_t *dev, uint8_t gpio, int val);
@@ -896,8 +897,12 @@ int rtlsdr_set_center_freq(rtlsdr_dev_t *dev, uint32_t freq)
 	if (last_ds < 0)
 		return 1;
 
-	/* Check if direct sampling should be enabled */
-	dev->direct_sampling = (freq < 28800000 && dev->tuner_type == RTLSDR_TUNER_R820T)  ? 2 : 0;
+	/* Check if direct sampling should be enabled.
+	* Also only enable auto switch if ds mode is 0 (aka None, or standard mode) 
+	*/
+	if(dev->direct_sampling_mode == 0) {
+		dev->direct_sampling = (freq < 28800000 && dev->tuner_type == RTLSDR_TUNER_R820T) ? 2 : 0;
+	}
 
 	if (dev->direct_sampling) {
 		rtlsdr_set_i2c_repeater(dev, 0);
@@ -917,7 +922,7 @@ int rtlsdr_set_center_freq(rtlsdr_dev_t *dev, uint32_t freq)
 	* the previous frequency back again
 	*/
 	if (last_ds != dev->direct_sampling) {
-		return rtlsdr_set_direct_sampling(dev, dev->direct_sampling);
+		return _rtlsdr_set_direct_sampling(dev, dev->direct_sampling);
 	}
 
 	return r;
@@ -1191,7 +1196,15 @@ int rtlsdr_set_agc_mode(rtlsdr_dev_t *dev, int on)
 	return rtlsdr_demod_write_reg(dev, 0, 0x19, on ? 0x25 : 0x05, 1);
 }
 
+
 int rtlsdr_set_direct_sampling(rtlsdr_dev_t *dev, int on)
+{
+	/* When the UI sets the ds mode, remember the mode set */
+	dev->direct_sampling_mode = (enum rtlsdr_ds_mode)on;
+	return _rtlsdr_set_direct_sampling(dev, on);
+}
+
+int _rtlsdr_set_direct_sampling(rtlsdr_dev_t *dev, int on)
 {
 	int r = 0;
 

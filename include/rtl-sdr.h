@@ -29,6 +29,13 @@ extern "C" {
 
 typedef struct rtlsdr_dev rtlsdr_dev_t;
 
+enum rtlsdr_ds_mode {
+	RTLSDR_DS_IQ = 0,	/* I/Q quadrature sampling of tuner output */
+	RTLSDR_DS_I,		/* 1: direct sampling on I branch: usually not connected */
+	RTLSDR_DS_Q,		/* 2: direct sampling on Q branch: HF on rtl-sdr v3 dongle */
+};
+
+
 RTLSDR_API uint32_t rtlsdr_get_device_count(void);
 
 RTLSDR_API const char* rtlsdr_get_device_name(uint32_t index);
@@ -302,6 +309,7 @@ RTLSDR_API int rtlsdr_set_agc_mode(rtlsdr_dev_t *dev, int on);
  * \param on 0 means disabled, 1 I-ADC input enabled, 2 Q-ADC input enabled
  * \return 0 on success
  */
+int _rtlsdr_set_direct_sampling(rtlsdr_dev_t *dev, int on);
 RTLSDR_API int rtlsdr_set_direct_sampling(rtlsdr_dev_t *dev, int on);
 
 /*!
