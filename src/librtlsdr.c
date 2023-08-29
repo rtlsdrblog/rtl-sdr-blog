@@ -898,10 +898,10 @@ int rtlsdr_set_center_freq(rtlsdr_dev_t *dev, uint32_t freq)
 		return 1;
 
 	/* Check if direct sampling should be enabled.
-	* Also only enable auto switch if ds mode is 0 (aka None, or standard mode) 
+	* Also only enable auto switch if ds mode is 0 (aka None, or standard mode)
 	*/
 	if(dev->direct_sampling_mode == 0) {
-		dev->direct_sampling = (freq < 28800000 && dev->tuner_type == RTLSDR_TUNER_R820T) ? 2 : 0;
+		dev->direct_sampling = (freq < 24000000 && dev->tuner_type == RTLSDR_TUNER_R820T) ? 2 : 0;
 	}
 
 	if (dev->direct_sampling) {
