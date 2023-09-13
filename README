@@ -50,6 +50,25 @@ sudo ldconfig
 echo 'blacklist dvb_usb_rtl28xxu' | sudo tee --append /etc/modprobe.d/blacklist-dvb_usb_rtl28xxu.conf
 
 ***********************
+Alternative Debian Package Installation Method:
+***********************
+
+If you have a system reliant on the Debian packages (eg. FlightRadar24, FlightAware, ADSBExchange images) you can update them directly using this method:
+
+sudo apt update
+sudo apt install libusb-1.0-0-dev git cmake
+sudo apt install debhelper
+
+git clone https://github.com/rtlsdrblog/rtl-sdr-blog
+cd rtl-sdr-blog
+sudo dpkg-buildpackage -b --no-sign
+cd ..
+
+sudo dpkg -i librtlsdr0_0.6.0~rtlsdrblog1_armhf.deb
+sudo dpkg -i librtlsdr-dev_0.6.0~rtlsdrblog1_armhf.deb
+sudo dpkg -i rtl-sdr_0.6.0~rtlsdrblog1_armhf.deb
+
+***********************
 Installation (Windows):
 ***********************
 
