@@ -64,9 +64,9 @@ cd rtl-sdr-blog
 sudo dpkg-buildpackage -b --no-sign
 cd ..
 
-sudo dpkg -i librtlsdr0_0.6.0~rtlsdrblog1_armhf.deb
-sudo dpkg -i librtlsdr-dev_0.6.0~rtlsdrblog1_armhf.deb
-sudo dpkg -i rtl-sdr_0.6.0~rtlsdrblog1_armhf.deb
+sudo dpkg -i librtlsdr0_*
+sudo dpkg -i librtlsdr-dev_*
+sudo dpkg -i rtl-sdr_*
 
 ***********************
 Installation (Windows):
