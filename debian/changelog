@@ -1,4 +1,4 @@
-rtl-sdr (0.6.0~rtlsdrblog1) unstable; urgency=medium
+rtl-sdr (0.7.0~rtlsdrblog1) unstable; urgency=medium
 
   25-August-2023: Brought up to date with latest Osmocom upstream, and added some new features like auto-direct sampling. Also made the force bias tee function stronger, so it cant be turned off when the bias tee is forced, even when calling the bias tee function. Remove the rtl_tcp ringbuffer changes as this seems to cause more trouble that it helps.
   1) VCO PLL current fix - Improves stability at frequencies above ~1.5 GHz https://www.rtl-sdr.com/beta-testing-a-modified-rtl-sdr-driver-for-l-band-heat-issues/
