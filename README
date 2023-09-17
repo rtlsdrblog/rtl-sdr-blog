@@ -68,6 +68,24 @@ sudo dpkg -i librtlsdr0_*
 sudo dpkg -i librtlsdr-dev_*
 sudo dpkg -i rtl-sdr_*
 
+**********************
+Installation (MacOS):
+**********************
+
+First make sure you have installed homebrew and xcode. Open a terminal and run:
+
+brew uninstall rtl-sdr
+brew install cmake
+brew install libusb
+brew install pkgconfig
+git clone https://github.com/rtlsdrblog/rtl-sdr-blog
+cd rtl-sdr-blog
+mkdir build
+cd build/
+cmake ../
+make LIBRARY_PATH=/usr/local/lib
+sudo make install
+
 ***********************
 Installation (Windows):
 ***********************
