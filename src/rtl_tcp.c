@@ -58,7 +58,6 @@ typedef int socklen_t;
 
 #define DEFAULT_PORT_STR "1234"
 #define DEFAULT_SAMPLE_RATE_HZ 2048000
-#define DEFAULT_MAX_NUM_BUFFERS 500
 
 static SOCKET s;
 
