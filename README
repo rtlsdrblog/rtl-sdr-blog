@@ -37,7 +37,7 @@ sudo rm -rvf /usr/lib/librtlsdr* /usr/include/rtl-sdr* /usr/local/lib/librtlsdr*
 ***Now install the drivers***
 
 sudo apt update
-sudo apt install libusb-1.0-0-dev git cmake
+sudo apt install libusb-1.0-0-dev git cmake pkg-config
 git clone https://github.com/rtlsdrblog/rtl-sdr-blog
 cd rtl-sdr-blog/
 mkdir build
