@@ -64,9 +64,9 @@ cd rtl-sdr-blog
 sudo dpkg-buildpackage -b --no-sign
 cd ..
 
-sudo dpkg -i librtlsdr0_*
-sudo dpkg -i librtlsdr-dev_*
-sudo dpkg -i rtl-sdr_*
+sudo dpkg -i librtlsdr0_*.deb
+sudo dpkg -i librtlsdr-dev_*.deb
+sudo dpkg -i rtl-sdr_*.deb
 
 **********************
 Installation (MacOS):
