@@ -104,7 +104,7 @@ void usage(void)
 	printf("\t[-n max number of linked list buffers to keep (default: %d)]\n", DEFAULT_MAX_NUM_BUFFERS);
 	printf("\t[-d device index (default: 0)]\n");
 	printf("\t[-P ppm_error (default: 0)]\n");
-	printf("\t[-T enable bias-T on GPIO PIN 0 (works for rtl-sdr.com v3 dongles)]\n");
+	printf("\t[-T enable bias-T on GPIO PIN 0 (works for rtl-sdr.com v3/v4 dongles)]\n");
 	printf("\t[-D enable direct sampling (default: off)]\n");
 	exit(1);
 }
