@@ -80,6 +80,7 @@ struct r82xx_priv {
 	enum r82xx_xtal_cap_value	xtal_cap_sel;
 	uint16_t			pll;	/* kHz */
 	uint32_t			int_freq;
+	uint32_t			rf_freq;
 	uint8_t				fil_cal_code;
 	uint8_t				input;
 	int				has_lock;

@@ -222,7 +222,25 @@ static const struct r82xx_freq_range freq_ranges[] = {
 	/* .xtal_cap20p = */	0x00,	/* R16[1:0]  0pF (00)   */
 	/* .xtal_cap10p = */	0x00,
 	/* .xtal_cap0p = */	0x00,
+	}, {
+	/* .freq = */		1000,	/* Start freq, in MHz */
+	/* .open_d = */		0x00,	/* high */
+	/* .rf_mux_ploy = */	0x40,	/* R26[7:6]=1 (bypass)  R26[1:0]=0 (highest) */
+	/* .tf_c = */		0x00,	/* R27[7:0]  highest,highest */
+	/* .xtal_cap20p = */	0x00,	/* R16[1:0]  0pF (00)   */
+	/* .xtal_cap10p = */	0x00,
+	/* .xtal_cap0p = */	0x00,
+	}, {
+	/* .freq = */		1500,	/* Start freq, in MHz */
+	/* .open_d = */		0x00,	/* high */
+	/* .rf_mux_ploy = */	0x40,	/* R26[7:6]=1 (bypass)  R26[1:0]=0 (highest) */
+	/* .tf_c = */		0x00,	/* R27[7:0]  highest,highest */
+	/* .xtal_cap20p = */	0x00,	/* R16[1:0]  0pF (00)   */
+	/* .xtal_cap10p = */	0x00,
+	/* .xtal_cap0p = */	0x00,
 	}
+
+
 };
 
 static int r82xx_xtal_capacitor[][2] = {
@@ -986,8 +1004,16 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 		if (rc < 0)
 			return rc;
 
-		/* set fixed VGA gain for now (16.3 dB) */
-		rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f);
+		/* set fixed VGA gain based on frequency */
+		if (priv->rf_freq > MHZ(1500)) {
+			rc = r82xx_write_reg_mask(priv, 0x0c, 0x0f, 0x9f); // Max 40.5 dB
+		}
+		else if (priv->rf_freq > MHZ(1000)) {
+			rc = r82xx_write_reg_mask(priv, 0x0c, 0x0b, 0x9f);
+		}
+		else {
+			rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f); // 16.3 dB
+		}
 		if (rc < 0)
 			return rc;
 
@@ -1023,8 +1049,15 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 		if (rc < 0)
 			return rc;
 
-		/* set fixed VGA gain for now (26.5 dB) */
-		rc = r82xx_write_reg_mask(priv, 0x0c, 0x0b, 0x9f);
+		/* set fixed VGA gain based on frequency */
+		if (priv->rf_freq > MHZ(1500)) {
+			rc = r82xx_write_reg_mask(priv, 0x0c, 0x0f, 0x9f);
+		}
+		else {
+			/* set fixed VGA gain for now (26.5 dB) */
+			rc = r82xx_write_reg_mask(priv, 0x0c, 0x0b, 0x9f);
+		}
+
 		if (rc < 0)
 			return rc;
 	}
@@ -1145,6 +1178,7 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	/* if it's an RTL-SDR Blog V4, automatically upconvert by 28.8 MHz if we tune to HF
 	 * so that we don't need to manually set any upconvert offset in the SDR software */
 	upconvert_freq = is_rtlsdr_blog_v4 ? ((freq < MHZ(28.8)) ? (freq + MHZ(28.8)) : freq) : freq;
+      	priv->rf_freq = upconvert_freq;
 
 	lo_freq = upconvert_freq + priv->int_freq;
 
