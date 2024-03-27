@@ -222,25 +222,7 @@ static const struct r82xx_freq_range freq_ranges[] = {
 	/* .xtal_cap20p = */	0x00,	/* R16[1:0]  0pF (00)   */
 	/* .xtal_cap10p = */	0x00,
 	/* .xtal_cap0p = */	0x00,
-	}, {
-	/* .freq = */		1000,	/* Start freq, in MHz */
-	/* .open_d = */		0x00,	/* high */
-	/* .rf_mux_ploy = */	0x40,	/* R26[7:6]=1 (bypass)  R26[1:0]=0 (highest) */
-	/* .tf_c = */		0x00,	/* R27[7:0]  highest,highest */
-	/* .xtal_cap20p = */	0x00,	/* R16[1:0]  0pF (00)   */
-	/* .xtal_cap10p = */	0x00,
-	/* .xtal_cap0p = */	0x00,
-	}, {
-	/* .freq = */		1500,	/* Start freq, in MHz */
-	/* .open_d = */		0x00,	/* high */
-	/* .rf_mux_ploy = */	0x40,	/* R26[7:6]=1 (bypass)  R26[1:0]=0 (highest) */
-	/* .tf_c = */		0x00,	/* R27[7:0]  highest,highest */
-	/* .xtal_cap20p = */	0x00,	/* R16[1:0]  0pF (00)   */
-	/* .xtal_cap10p = */	0x00,
-	/* .xtal_cap0p = */	0x00,
 	}
-
-
 };
 
 static int r82xx_xtal_capacitor[][2] = {
