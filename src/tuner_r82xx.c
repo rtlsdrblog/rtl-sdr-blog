@@ -986,16 +986,7 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 		if (rc < 0)
 			return rc;
 
-		/* set fixed VGA gain based on frequency */
-		if (priv->rf_freq > MHZ(1500)) {
-			rc = r82xx_write_reg_mask(priv, 0x0c, 0x0f, 0x9f); // Max 40.5 dB
-		}
-		else if (priv->rf_freq > MHZ(1000)) {
-			rc = r82xx_write_reg_mask(priv, 0x0c, 0x0b, 0x9f);
-		}
-		else {
-			rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f); // 16.3 dB
-		}
+		rc = r82xx_set_vga_gain(priv);
 		if (rc < 0)
 			return rc;
 
@@ -1031,20 +1022,32 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 		if (rc < 0)
 			return rc;
 
-		/* set fixed VGA gain based on frequency */
-		if (priv->rf_freq > MHZ(1500)) {
-			rc = r82xx_write_reg_mask(priv, 0x0c, 0x0f, 0x9f);
-		}
-		else {
-			/* set fixed VGA gain for now (26.5 dB) */
-			rc = r82xx_write_reg_mask(priv, 0x0c, 0x0b, 0x9f);
-		}
+		/* set fixed VGA gain for now (26.5 dB) */
+		rc = r82xx_write_reg_mask(priv, 0x0c, 0x0b, 0x9f);
 
 		if (rc < 0)
 			return rc;
 	}
 
 	return 0;
+}
+
+int r82xx_set_vga_gain(struct r82xx_priv *priv) {
+
+	int rc;
+
+	/* set fixed VGA gain based on frequency */
+	if (priv->rf_freq > MHZ(1350)) {
+		rc = r82xx_write_reg_mask(priv, 0x0c, 0x0f, 0x9f); // Max 40.5 dB
+	}
+	else if (priv->rf_freq > MHZ(1000)) {
+		rc = r82xx_write_reg_mask(priv, 0x0c, 0x0b, 0x9f);
+	}
+	else {
+		rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f); // 16.3 dB
+	}
+
+	return rc;
 }
 
 /* Bandwidth contribution by low-pass filter. */
@@ -1165,6 +1168,10 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	lo_freq = upconvert_freq + priv->int_freq;
 
 	rc = r82xx_set_mux(priv, lo_freq);
+	if (rc < 0)
+		goto err;
+
+	rc = r82xx_set_vga_gain(priv);
 	if (rc < 0)
 		goto err;
 
