@@ -792,7 +792,7 @@ static int r82xx_set_tv_standard(struct r82xx_priv *priv,
 	/* BW < 6 MHz */
 	if_khz = 3570;
 	filt_cal_lo = 56000;	/* 52000->56000 */
-	filt_gain = 0x10;	/* +3db, 6mhz on */
+	filt_gain = 0x30;	/* +3db, 6mhz on */
 	img_r = 0x00;		/* image negative */
 	filt_q = 0x10;		/* r10[4]:low q(1'b1) */
 	hp_cor = 0x6b;		/* 1.7m disable, +2cap, 1.0mhz */
