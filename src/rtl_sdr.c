@@ -119,6 +119,7 @@ int main(int argc, char **argv)
 	FILE *file;
 	uint8_t *buffer;
 	int dev_index = 0;
+	int rtlsdr_get_index_by_serial(const char *serial);
 	int dev_given = 0;
 	uint32_t frequency = 100000000;
 	uint32_t samp_rate = DEFAULT_SAMPLE_RATE;

@@ -98,6 +98,7 @@ struct dongle_state
 	pthread_t thread;
 	rtlsdr_dev_t *dev;
 	int      dev_index;
+//	int      rtlsdr_get_index_by_serial(const char *serial);
 	uint32_t freq;
 	uint32_t rate;
 	int      gain;

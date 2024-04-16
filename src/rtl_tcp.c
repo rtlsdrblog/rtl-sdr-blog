@@ -394,6 +394,7 @@ int main(int argc, char **argv)
 	int aiErr;
 	uint32_t buf_num = 0;
 	int dev_index = 0;
+	int rtlsdr_get_index_by_serial(const char *serial);
 	int dev_given = 0;
 	int gain = 0;
 	int ppm_error = 0;

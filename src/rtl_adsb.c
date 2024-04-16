@@ -371,6 +371,7 @@ int main(int argc, char **argv)
 	int r, opt;
 	int gain = AUTO_GAIN; /* tenths of a dB */
 	int dev_index = 0;
+	int rtlsdr_get_index_by_serial(const char *serial);
 	int dev_given = 0;
 	int ppm_error = 0;
 	int enable_biastee = 0;

@@ -51,6 +51,7 @@ int main(int argc, char **argv)
 {
 	int i, r, opt;
 	int dev_index = 0;
+	int rtlsdr_get_index_by_serial(const char *serial);
 	int dev_given = 0;
 	uint32_t bias_on = 0;
 	uint32_t gpio_pin = 0;

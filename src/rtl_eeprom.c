@@ -250,6 +250,7 @@ int main(int argc, char **argv)
 {
 	int i, r, opt;
 	uint32_t dev_index = 0;
+	int rtlsdr_get_index_by_serial(const char *serial);
 	int device_count;
 	char *filename = NULL;
 	FILE *file = NULL;
