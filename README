@@ -56,7 +56,7 @@ Alternative Debian Package Installation Method:
 If you have a system reliant on the Debian packages (eg. FlightRadar24, FlightAware, ADSBExchange images) you can update them directly using this method:
 
 sudo apt update
-sudo apt install libusb-1.0-0-dev git cmake
+sudo apt install libusb-1.0-0-dev git cmake pkg-config
 sudo apt install debhelper
 
 git clone https://github.com/rtlsdrblog/rtl-sdr-blog
