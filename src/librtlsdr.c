@@ -901,7 +901,7 @@ int rtlsdr_set_center_freq(rtlsdr_dev_t *dev, uint32_t freq)
 	* Also only enable auto switch if ds mode is 0 (aka None, or standard mode)
 	*/
 	if(dev->direct_sampling_mode == 0) {
-		dev->direct_sampling = (freq < 24000000 && dev->tuner_type == RTLSDR_TUNER_R820T) ? 2 : 0;
+		dev->direct_sampling = (freq < 24000000 && dev->tuner_type == RTLSDR_TUNER_R820T && !rtlsdr_check_dongle_model(dev, "RTLSDRBlog", "Blog V4L")) ? 2 : 0;
 	}
 
 	if (dev->direct_sampling) {
@@ -1613,7 +1613,12 @@ int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)
 	reg = rtlsdr_i2c_read_reg(dev, R820T_I2C_ADDR, R82XX_CHECK_ADDR);
 	if (reg == R82XX_CHECK_VAL) {
 		fprintf(stderr, "Found Rafael Micro R820T tuner\n");
+
+		if (rtlsdr_check_dongle_model(dev, "RTLSDRBlog", "Blog V4L"))
+			fprintf(stderr, "RTL-SDR Blog V4 Lite Detected\n");
+
 		dev->tuner_type = RTLSDR_TUNER_R820T;
+
 		goto found;
 	}
 
@@ -1621,7 +1626,7 @@ int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)
 	if (reg == R82XX_CHECK_VAL) {
 		fprintf(stderr, "Found Rafael Micro R828D tuner\n");
 
-		if (rtlsdr_check_dongle_model(dev, "RTLSDRBlog", "Blog V4"))
+ 		if (rtlsdr_check_dongle_model(dev, "RTLSDRBlog", "Blog V4"))
 			fprintf(stderr, "RTL-SDR Blog V4 Detected\n");
 
 		dev->tuner_type = RTLSDR_TUNER_R828D;
