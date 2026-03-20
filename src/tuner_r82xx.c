@@ -1201,6 +1201,19 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 		 */
 		band = (freq <= MHZ(28.8)) ? HF : ((freq > MHZ(28.8) && freq < MHZ(250)) ? VHF : UHF);
 
+		/* bypass tracking filter for HF to reduce insertion loss,
+		 * the upconverter path doesn't benefit from it.
+		 * Must be outside band-change guard since r82xx_set_mux
+		 * re-applies the tracking filter on every frequency change. */
+		if (band == HF) {
+			rc = r82xx_write_reg_mask(priv, 0x1a, 0x40, 0xc3);
+			if (rc < 0)
+				goto err;
+			rc = r82xx_write_reg(priv, 0x1b, 0x00);
+			if (rc < 0)
+				goto err;
+		}
+
 		/* switch between tuner inputs on the RTL-SDR Blog V4 */
 		if (band != priv->input) {
 			priv->input = band;
@@ -1240,7 +1253,20 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 		 */
 		band = (freq <= MHZ(28.8)) ? HF : UHF;
 
-		/* switch between tuner inputs on the RTL-SDR Blog V4 */
+		/* bypass tracking filter for HF to reduce insertion loss,
+		 * the upconverter path doesn't benefit from it.
+		 * Must be outside band-change guard since r82xx_set_mux
+		 * re-applies the tracking filter on every frequency change. */
+		if (band == HF) {
+			rc = r82xx_write_reg_mask(priv, 0x1a, 0x40, 0xc3);
+			if (rc < 0)
+				goto err;
+			rc = r82xx_write_reg(priv, 0x1b, 0x00);
+			if (rc < 0)
+				goto err;
+		}
+
+		/* switch between tuner inputs on the RTL-SDR Blog V4L */
 		if (band != priv->input) {
 			priv->input = band;
 
@@ -1252,7 +1278,7 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 			if (rc < 0)
 				goto err;
 
-			/* activate cable 1 (VHF input) */
+			/* activate cable 1 (HF input) */
 			rc = r82xx_write_reg_mask(priv, 0x05, cable_1_in, 0x40);
 
 			if (rc < 0)
