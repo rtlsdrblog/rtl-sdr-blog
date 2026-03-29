@@ -311,6 +311,7 @@ int main(int argc, char **argv)
 	int sync_mode = 0;
 	uint8_t *buffer;
 	int dev_index = 0;
+	int rtlsdr_get_index_by_serial(const char *serial);
 	int dev_given = 0;
 	uint32_t out_block_size = DEFAULT_BUF_LENGTH;
 	int count;
