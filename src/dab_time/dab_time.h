@@ -24,9 +24,11 @@
 
 /* FIC parameters */
 #define FIC_BITS_PER_SYMBOL (DAB_K * 2)  /* DQPSK = 2 bits/carrier */
-#define FIC_PUNCTURED_CODEWORD_BITS 2304  /* After depuncturing */
+#define FIC_PUNCTURED_CODEWORD_BITS 2304  /* Per sub-channel after puncturing */
 #define FIC_DECODED_BYTES   32            /* Per FIB (Fast Information Block) */
-#define NUM_FIBS            3             /* FIBs per FIC (Mode I) */
+#define FIC_NUM_SUBCH       4             /* Sub-channels in FIC (Mode I) */
+#define FIC_FIBS_PER_SUBCH  3             /* FIBs per sub-channel */
+#define NUM_FIBS            (FIC_NUM_SUBCH * FIC_FIBS_PER_SUBCH)  /* 12 FIBs per frame */
 
 /* Viterbi constraint length 7, rate 1/4 */
 #define VITERBI_K           7

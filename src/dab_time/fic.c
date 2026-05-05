@@ -99,43 +99,49 @@ static int depuncture(uint8_t *in, int in_len, uint8_t *out, int max_out)
 }
 
 /* ─── FIC Decode ─────────────────────────────────────────────────────
- * Takes soft bits from 3 FIC OFDM symbols, returns decoded FIB data.
- * Returns number of valid FIBs decoded (0-3). */
+ * Takes soft bits from 3 FIC OFDM symbols (9216 bits), returns decoded FIB data.
+ * Structure: 9216 bits → 4 sub-channels × 2304 punctured bits each
+ * Each sub-channel: depuncture → 3072 → Viterbi (rate 1/4) → 768 bits = 3 FIBs
+ * Returns number of valid FIBs decoded (0-12). */
 
 int fic_decode(uint8_t *soft_bits, int len, uint8_t *fib_data)
 {
-	uint8_t depunctured[4096];
-	uint8_t decoded[128];
+	uint8_t depunctured[3072 + 128];  /* 2304 × 32/24 = 3072, plus margin */
+	uint8_t decoded[96];              /* 768 bits = 96 bytes = 3 FIBs */
 	int valid_fibs = 0;
-	int fib;
-	int sub_len;
+	int subch, fib;
 	uint16_t crc_calc, crc_recv;
 
-	/* Process each FIB sub-block
-	 * Each FIB: ~2016 punctured soft bits → depuncture → Viterbi → 256 bits */
-	sub_len = len / NUM_FIBS;
+	if (len < FIC_NUM_SUBCH * FIC_PUNCTURED_CODEWORD_BITS)
+		return 0;
 
-	for (fib = 0; fib < NUM_FIBS; fib++) {
+	for (subch = 0; subch < FIC_NUM_SUBCH; subch++) {
 		int dp_len;
+		uint8_t *sub_bits = &soft_bits[subch * FIC_PUNCTURED_CODEWORD_BITS];
 
-		/* Depuncture */
-		dp_len = depuncture(&soft_bits[fib * sub_len], sub_len,
-				    depunctured, 2688);
+		/* Depuncture: 2304 → 3072 soft bits */
+		dp_len = depuncture(sub_bits, FIC_PUNCTURED_CODEWORD_BITS,
+				    depunctured, 3072);
 
-		/* Viterbi decode: 2688 soft bits (rate 1/4) → 672 bits → 84 bytes
-		 * But FIB is only 32 bytes (256 bits), rest is tail/padding */
-		viterbi_decode(depunctured, dp_len, decoded, 256);
+		/* Viterbi decode: 3072 soft bits (rate 1/4) → 768 bits = 96 bytes */
+		viterbi_decode(depunctured, dp_len, decoded, 768);
 
-		/* Energy dispersal */
-		energy_dispersal(decoded, 32);
+		/* Process 3 FIBs from this sub-channel */
+		for (fib = 0; fib < FIC_FIBS_PER_SUBCH; fib++) {
+			uint8_t fib_bytes[32];
+			memcpy(fib_bytes, &decoded[fib * 32], 32);
 
-		/* CRC check: bytes 0-29 = data, bytes 30-31 = CRC */
-		crc_calc = crc16_fib(decoded, 30);
-		crc_recv = ((uint16_t)decoded[30] << 8) | decoded[31];
+			/* Energy dispersal */
+			energy_dispersal(fib_bytes, 32);
 
-		if (crc_calc == crc_recv) {
-			memcpy(&fib_data[valid_fibs * 30], decoded, 30);
-			valid_fibs++;
+			/* CRC check: bytes 0-29 = data, bytes 30-31 = CRC */
+			crc_calc = crc16_fib(fib_bytes, 30);
+			crc_recv = ((uint16_t)fib_bytes[30] << 8) | fib_bytes[31];
+
+			if (crc_calc == crc_recv) {
+				memcpy(&fib_data[valid_fibs * 30], fib_bytes, 30);
+				valid_fibs++;
+			}
 		}
 	}
 
