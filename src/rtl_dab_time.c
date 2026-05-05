@@ -366,10 +366,8 @@ static void *processing_thread(void *arg)
 
 		valid_fibs = fic_decode(soft_bits, soft_bits_len, fib_data);
 		if (valid_fibs == 0) {
-			fprintf(stderr, ".");  /* FIC CRC failed - show progress */
 			continue;
 		}
-		fprintf(stderr, "\nFIC decoded: %d valid FIB(s)\n", valid_fibs);
 
 		for (fib = 0; fib < valid_fibs; fib++) {
 			memset(&t, 0, sizeof(t));
@@ -382,6 +380,20 @@ static void *processing_thread(void *arg)
 					free(frame_buf);
 					return NULL;
 				}
+			}
+		}
+
+		/* Track if we're decoding FIBs but not finding time */
+		if (!a->times_set) {
+			static int fib_count = 0;
+			fib_count += valid_fibs;
+			if (fib_count >= 100 && !a->times_set) {
+				fprintf(stderr, "\nFIC decoding OK (%d FIBs) but no time data (FIG 0/10) on this ensemble.\n"
+					"This multiplex may not broadcast time. Try another channel.\n", fib_count);
+				a->rescan_needed = 1;
+				rtlsdr_cancel_async(dev);
+				free(frame_buf);
+				return NULL;
 			}
 		}
 	}

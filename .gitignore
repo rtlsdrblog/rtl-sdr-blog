@@ -57,3 +57,6 @@ doc/dab.zip
 doc/Dab+.mp3
 test_fic_offline
 .kiro/
+*.msc
+*.wav
+*.fic
