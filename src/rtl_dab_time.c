@@ -60,7 +60,7 @@ static const struct dab_channel dab_channels[] = {
 
 /* ─── Configuration ─────────────────────────────────────────────────── */
 
-#define BUF_LEN         (DAB_T_F)      /* One DAB frame in samples */
+#define BUF_LEN         (DAB_T_F * 2)  /* Two DAB frames for timing margin */
 #define MAX_FRAMES      10             /* Give up after this many frames without sync */
 #define SCAN_DWELL_MS   800            /* Time to dwell on each channel during scan */
 #define SCAN_SETTLE_MS  100            /* Settling time after retune (AGC) */
