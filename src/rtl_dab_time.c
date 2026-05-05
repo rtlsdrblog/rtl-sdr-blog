@@ -291,6 +291,7 @@ static void *processing_thread(void *arg)
 
 		null_pos = ofdm_find_null(frame_buf, BUF_LEN);
 		if (null_pos < 0) {
+			fprintf(stderr, "N");
 			frames_without_sync++;
 			if (frames_without_sync > MAX_FRAMES) {
 				fprintf(stderr, "Lost DAB signal on block %s (%.3f MHz)\n",
@@ -308,7 +309,10 @@ static void *processing_thread(void *arg)
 		frames_without_sync = 0;
 
 		pos = null_pos + DAB_T_NULL;
-		if (pos + (DAB_NUM_FIC_SYMBOLS + 1) * DAB_T_S > BUF_LEN) continue;
+		if (pos + (DAB_NUM_FIC_SYMBOLS + 1) * DAB_T_S > BUF_LEN) {
+			fprintf(stderr, "B");
+			continue;
+		}
 
 		/* PRS */
 		ofdm.symbol_count = 0;
