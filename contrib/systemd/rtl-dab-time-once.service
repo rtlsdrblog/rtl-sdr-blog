@@ -1,0 +1,27 @@
+[Unit]
+Description=Set system clock from DAB radio (one-shot at boot)
+Documentation=https://github.com/rtlsdrblog/rtl-sdr-blog
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service
+Before=time-sync.target sysinit.target
+Conflicts=systemd-timesyncd.service chronyd.service ntp.service
+
+[Service]
+Type=oneshot
+
+# Auto-scan, set clock once, then exit
+ExecStart=/usr/local/bin/rtl_dab_time -1 -s
+
+# Timeout: give up after 60 seconds if no DAB signal found
+TimeoutStartSec=60
+
+# Needs clock-setting capability
+AmbientCapabilities=CAP_SYS_TIME
+CapabilityBoundingSet=CAP_SYS_TIME
+
+# Allow USB access
+SupplementaryGroups=plugdev
+DeviceAllow=/dev/bus/usb/* rw
+
+[Install]
+WantedBy=sysinit.target

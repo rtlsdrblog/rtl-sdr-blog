@@ -1,0 +1,48 @@
+[Unit]
+Description=DAB Radio Time Synchronization
+Documentation=https://github.com/rtlsdrblog/rtl-sdr-blog
+After=local-fs.target usb-settle.service
+Before=time-sync.target
+Wants=time-sync.target
+
+# Prevent running alongside other time sync services
+Conflicts=systemd-timesyncd.service chronyd.service ntp.service ntpd.service
+
+[Service]
+Type=simple
+
+# Auto-scan mode: finds the strongest DAB channel automatically
+ExecStart=/usr/local/bin/rtl_dab_time
+
+# Or specify a known channel (uncomment and edit):
+#ExecStart=/usr/local/bin/rtl_dab_time -f 202.928M
+
+Restart=on-failure
+RestartSec=10
+
+# Run as unprivileged user with only the capability to set the clock
+User=dab-time
+Group=plugdev
+AmbientCapabilities=CAP_SYS_TIME
+CapabilityBoundingSet=CAP_SYS_TIME
+NoNewPrivileges=yes
+
+# Systemd hardening
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+PrivateUsers=no
+
+# Allow access to USB devices
+DeviceAllow=/dev/bus/usb/* rw
+SupplementaryGroups=plugdev
+
+[Install]
+WantedBy=multi-user.target
