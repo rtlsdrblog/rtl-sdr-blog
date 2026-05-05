@@ -180,7 +180,6 @@ static void init_freq_interleave(void)
 {
 	int i, j, pi;
 	int table[2048];  /* Full permutation sequence */
-	int carrier_map[2048];  /* Which logical index each perm value gets */
 
 	if (freq_interleave_init) return;
 
@@ -189,14 +188,19 @@ static void init_freq_interleave(void)
 	for (i = 1; i < 2048; i++)
 		table[i] = (13 * table[i - 1] + 511) % 2048;
 
-	/* Build forward map: iterate through permutation sequence,
-	 * assign logical indices 0..1535 to entries in range [256..1791] */
+	/* The interleaver at the transmitter places logical bit j at
+	 * physical carrier position determined by the permutation.
+	 * To de-interleave: freq_deinterleave[logical_pos] = physical_carrier
+	 * Then: soft_bits[logical_pos] = demod[physical_carrier]
+	 *
+	 * Iterate permutation, assign sequential logical indices to
+	 * entries that map to valid carriers (values 256..1791) */
 	j = 0;  /* logical index counter */
 	for (i = 0; i < 2048; i++) {
 		pi = table[i];
 		if (pi >= 256 && pi <= 1791) {
-			/* Physical carrier = pi - 256, logical position = j */
-			freq_deinterleave[pi - 256] = j;
+			/* logical position j maps to physical carrier pi-256 */
+			freq_deinterleave[j] = pi - 256;
 			j++;
 		}
 	}
@@ -231,10 +235,12 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 	if (s->symbol_count > 0 && soft_bits) {
 		for (i = 0; i < DAB_K; i++) {
 			int sb0, sb1;
-			int logical_pos;
+			int phys;
 			float re, im, mag;
 
-			diff = carriers[i] * conjf(s->prev_carriers[i]);
+			/* Frequency de-interleave: logical bit i comes from physical carrier */
+			phys = freq_deinterleave[i];
+			diff = carriers[phys] * conjf(s->prev_carriers[phys]);
 			re = crealf(diff);
 			im = cimagf(diff);
 
@@ -246,8 +252,7 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 			}
 
 			/* DAB DQPSK soft bits: map I and Q to soft decisions
-			 * Convention: 0 = confident "1", 255 = confident "0"
-			 * Bit 0 from real part, Bit 1 from imaginary part */
+			 * Convention: 0 = confident "1", 255 = confident "0" */
 			sb0 = (int)(128.0f - re * 127.0f);
 			sb1 = (int)(128.0f - im * 127.0f);
 			if (sb0 < 0) sb0 = 0;
@@ -255,10 +260,8 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 			if (sb1 < 0) sb1 = 0;
 			if (sb1 > 255) sb1 = 255;
 
-			/* Frequency de-interleave: place bits at logical position */
-			logical_pos = freq_deinterleave[i];
-			soft_bits[logical_pos * 2]     = (uint8_t)sb0;
-			soft_bits[logical_pos * 2 + 1] = (uint8_t)sb1;
+			soft_bits[i * 2]     = (uint8_t)sb0;
+			soft_bits[i * 2 + 1] = (uint8_t)sb1;
 		}
 	}
 
