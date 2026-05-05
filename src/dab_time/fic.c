@@ -139,6 +139,25 @@ static int fic_decode_block(const uint8_t *ficblock, uint8_t *fib_data)
 	/* Viterbi decode: 3096 soft bits → 768 data bits */
 	viterbi_decode(viterbi_input, local, decoded_bits, 768);
 
+	/* Debug: show first 16 decoded bits as a hex byte pair */
+	{
+		static int dbg_count = 0;
+		if (dbg_count < 4) {
+			int d;
+			uint8_t byte;
+			fprintf(stderr, "\n[FIC] depunc=%d vit_in: ", local);
+			for (d = 0; d < 8; d++) {
+				byte = 0;
+				int b2;
+				for (b2 = 0; b2 < 8; b2++)
+					byte = (byte << 1) | (decoded_bits[d*8+b2] & 1);
+				fprintf(stderr, "%02X ", byte);
+			}
+			fprintf(stderr, "\n");
+			dbg_count++;
+		}
+	}
+
 	/* Energy dispersal (XOR with PRBS, bit-level) */
 	for (i = 0; i < 768; i++)
 		decoded_bits[i] ^= PRBS[i];
