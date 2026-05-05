@@ -60,7 +60,7 @@ static const struct dab_channel dab_channels[] = {
 
 /* ─── Configuration ─────────────────────────────────────────────────── */
 
-#define BUF_LEN         (DAB_T_F * 2)  /* One full DAB frame, complex */
+#define BUF_LEN         (DAB_T_F)      /* One DAB frame in samples */
 #define MAX_FRAMES      10             /* Give up after this many frames without sync */
 #define SCAN_DWELL_MS   800            /* Time to dwell on each channel during scan */
 #define SCAN_SETTLE_MS  100            /* Settling time after retune (AGC) */
@@ -318,6 +318,28 @@ static void *processing_thread(void *arg)
 		if (pos + (DAB_NUM_FIC_SYMBOLS + 1) * DAB_T_S > BUF_LEN) {
 			fprintf(stderr, "B");
 			continue;
+		}
+
+		/* Fine timing: correlate cyclic prefix to find exact PRS start */
+		{
+			int search = 100;  /* ±100 samples around estimate */
+			int s_start = pos - search;
+			int s_end = pos + search;
+			int best = pos;
+			float best_corr = 0.0f;
+			int sp;
+			if (s_start < 0) s_start = 0;
+			if (s_end + DAB_T_S > BUF_LEN) s_end = BUF_LEN - DAB_T_S;
+			for (sp = s_start; sp <= s_end; sp += 2) {
+				cfloat corr = 0;
+				int ci;
+				for (ci = 0; ci < DAB_T_G; ci += 8) {
+					corr += frame_buf[sp + ci] * conjf(frame_buf[sp + ci + DAB_T_U]);
+				}
+				float mag = crealf(corr)*crealf(corr) + cimagf(corr)*cimagf(corr);
+				if (mag > best_corr) { best_corr = mag; best = sp; }
+			}
+			pos = best;
 		}
 
 		/* PRS - store as phase reference */
