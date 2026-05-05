@@ -121,6 +121,7 @@ int ofdm_find_null(cfloat *samples, int len)
 	float power, min_power = 1e30f;
 	float avg_power = 0.0f;
 	int window = DAB_T_NULL / 4;  /* Use quarter-null for detection */
+	int num_windows = 0;
 
 	if (len < DAB_T_NULL + DAB_T_S) return -1;
 
@@ -134,15 +135,20 @@ int ofdm_find_null(cfloat *samples, int len)
 			power += re * re + im * im;
 		}
 		avg_power += power;
+		num_windows++;
 		if (power < min_power) {
 			min_power = power;
 			best_pos = i;
 		}
 	}
-	avg_power /= (len / (window / 2));
 
-	/* Null symbol should be at least 6dB below average */
-	if (min_power < avg_power * 0.25f) {
+	if (num_windows == 0) return -1;
+	avg_power /= num_windows;
+
+	/* Null symbol should be significantly below average.
+	 * Use 3dB threshold (0.5) — more tolerant of weak signals
+	 * and AGC transients than the theoretical 10+dB null depth. */
+	if (avg_power > 0.0f && min_power < avg_power * 0.5f) {
 		return best_pos;
 	}
 	return -1;

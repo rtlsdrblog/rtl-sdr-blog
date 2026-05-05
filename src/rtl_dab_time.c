@@ -62,7 +62,9 @@ static const struct dab_channel dab_channels[] = {
 
 #define BUF_LEN         (DAB_T_F * 2)  /* One full DAB frame, complex */
 #define MAX_FRAMES      10             /* Give up after this many frames without sync */
-#define SCAN_DWELL_MS   500            /* Time to dwell on each channel during scan */
+#define SCAN_DWELL_MS   800            /* Time to dwell on each channel during scan */
+#define SCAN_SETTLE_MS  100            /* Settling time after retune (AGC) */
+#define SCAN_ATTEMPTS   2              /* Read attempts per channel */
 
 static volatile int do_exit = 0;
 static rtlsdr_dev_t *dev = NULL;
@@ -185,7 +187,7 @@ static int scan_channels(int gain, int ppm, int enable_biastee)
 	cfloat *scan_cfloat;
 	int scan_samples = (DAB_SAMPLE_RATE * SCAN_DWELL_MS) / 1000;
 	int scan_bytes = scan_samples * 2;  /* I + Q bytes */
-	int i;
+	int i, attempt;
 
 	scan_buf = (unsigned char *)malloc(scan_bytes);
 	scan_cfloat = (cfloat *)malloc(scan_samples * sizeof(cfloat));
@@ -205,27 +207,34 @@ static int scan_channels(int gain, int ppm, int enable_biastee)
 		rtlsdr_set_center_freq(dev, dab_channels[ch].freq_hz);
 		rtlsdr_reset_buffer(dev);
 
-		/* Short dwell: read synchronously */
-		usleep(50000);  /* 50ms settling time after retune */
-		if (rtlsdr_read_sync(dev, scan_buf, scan_bytes, &n_read) < 0) {
-			fprintf(stderr, "read error\n");
-			continue;
+		/* Wait for AGC/PLL to settle after retune */
+		usleep(SCAN_SETTLE_MS * 1000);
+
+		/* Discard first read to flush stale samples */
+		rtlsdr_read_sync(dev, scan_buf, scan_bytes, &n_read);
+
+		for (attempt = 0; attempt < SCAN_ATTEMPTS; attempt++) {
+			if (rtlsdr_read_sync(dev, scan_buf, scan_bytes, &n_read) < 0) {
+				fprintf(stderr, "read error\n");
+				break;
+			}
+
+			/* Convert to complex float */
+			for (i = 0; i < (int)n_read / 2 && i < scan_samples; i++) {
+				scan_cfloat[i] = ((float)scan_buf[i*2] - 127.5f)
+				               + I * ((float)scan_buf[i*2+1] - 127.5f);
+			}
+
+			/* Check for null symbol (DAB signal indicator) */
+			if (detect_dab_signal(scan_cfloat, i)) {
+				fprintf(stderr, "DAB FOUND!\n");
+				found = ch;
+				break;
+			}
 		}
 
-		/* Convert to complex float */
-		for (i = 0; i < (int)n_read / 2 && i < scan_samples; i++) {
-			scan_cfloat[i] = ((float)scan_buf[i*2] - 127.5f)
-			               + I * ((float)scan_buf[i*2+1] - 127.5f);
-		}
-
-		/* Check for null symbol (DAB signal indicator) */
-		if (detect_dab_signal(scan_cfloat, i)) {
-			fprintf(stderr, "DAB FOUND!\n");
-			found = ch;
-			break;
-		} else {
-			fprintf(stderr, "no signal\n");
-		}
+		if (found >= 0) break;
+		fprintf(stderr, "no signal\n");
 	}
 
 	free(scan_buf);
