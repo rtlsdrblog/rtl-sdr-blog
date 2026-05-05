@@ -289,6 +289,8 @@ static void *processing_thread(void *arg)
 		buf_ready_flag = 0;
 		pthread_mutex_unlock(&buf_mutex);
 
+		fprintf(stderr, "F");
+
 		null_pos = ofdm_find_null(frame_buf, BUF_LEN);
 		if (null_pos < 0) {
 			fprintf(stderr, "N");
@@ -492,9 +494,7 @@ int main(int argc, char **argv)
 		buf_ready_flag = 0;
 
 		pthread_create(&proc_thread, NULL, processing_thread, &args);
-		fprintf(stderr, "[starting async read...]\n");
-		r = rtlsdr_read_async(dev, rtlsdr_callback, NULL, 0, BUF_LEN * 2);
-		fprintf(stderr, "[async read returned: %d]\n", r);
+		r = rtlsdr_read_async(dev, rtlsdr_callback, NULL, 0, 65536);
 		pthread_mutex_lock(&buf_mutex);
 		buf_ready_flag = 1;
 		pthread_cond_signal(&buf_ready);
