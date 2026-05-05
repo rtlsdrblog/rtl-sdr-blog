@@ -44,18 +44,17 @@ static void init_tables(void)
 	tables_initialized = 1;
 }
 
-/* Branch metric: distance between received soft bits and expected bits
- * Soft bits: 0 = confident 1, 255 = confident 0, 128 = uncertain */
+/* Branch metric: Hamming-like distance between received soft bits and expected.
+ * Soft bits: 0 = confident 1, 255 = confident 0, 128 = uncertain.
+ * Expected: 0 or 255 in same convention.
+ * Lower metric = better match. */
 static int branch_metric(uint8_t *received, uint8_t *expected, int n)
 {
 	int i, metric = 0;
 	for (i = 0; i < n; i++) {
-		/* If expected bit is 1, metric += received (low = good match)
-		 * If expected bit is 0, metric += (255 - received) */
-		if (expected[i])
-			metric += received[i];
-		else
-			metric += 255 - received[i];
+		int diff = (int)received[i] - (int)expected[i];
+		if (diff < 0) diff = -diff;
+		metric += diff;
 	}
 	return metric;
 }
@@ -93,7 +92,8 @@ void viterbi_decode(uint8_t *input, int input_len, uint8_t *output, int output_b
 			if (pm_prev[state] >= INT_MAX / 2) continue;
 
 			for (input_bit = 0; input_bit < 2; input_bit++) {
-				next_state = ((state << 1) | input_bit) & (NUM_STATES - 1);
+				/* Shift register: input enters at MSB (bit 5 of 6-bit state) */
+				next_state = (state >> 1) | (input_bit << (VITERBI_K - 2));
 
 				/* Compute branch metric */
 				for (i = 0; i < RATE; i++)

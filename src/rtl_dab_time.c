@@ -258,12 +258,18 @@ static void *processing_thread(void *arg)
 	struct ofdm_state ofdm;
 	struct fic_state fic;
 	struct dab_time t;
-	cfloat frame_buf[BUF_LEN];
+	cfloat *frame_buf;
 	uint8_t soft_bits[FIC_BITS_PER_SYMBOL * DAB_NUM_FIC_SYMBOLS];
 	uint8_t fib_data[30 * NUM_FIBS];
 	int null_pos, valid_fibs;
 	int frames_without_sync = 0;
 	int soft_bits_len = 0;
+
+	frame_buf = (cfloat *)malloc(BUF_LEN * sizeof(cfloat));
+	if (!frame_buf) {
+		fprintf(stderr, "Error: frame buffer allocation failed\n");
+		return NULL;
+	}
 
 	ofdm_init(&ofdm);
 	fic_init(&fic);
@@ -291,6 +297,9 @@ static void *processing_thread(void *arg)
 			}
 			continue;
 		}
+
+		if (frames_without_sync > 0)
+			fprintf(stderr, "OFDM sync acquired (null at sample %d)\n", null_pos);
 		frames_without_sync = 0;
 
 		pos = null_pos + DAB_T_NULL;
@@ -314,7 +323,11 @@ static void *processing_thread(void *arg)
 		if (soft_bits_len < FIC_BITS_PER_SYMBOL * DAB_NUM_FIC_SYMBOLS) continue;
 
 		valid_fibs = fic_decode(soft_bits, soft_bits_len, fib_data);
-		if (valid_fibs == 0) continue;
+		if (valid_fibs == 0) {
+			fprintf(stderr, ".");  /* FIC CRC failed - show progress */
+			continue;
+		}
+		fprintf(stderr, "\nFIC decoded: %d valid FIB(s)\n", valid_fibs);
 
 		for (fib = 0; fib < valid_fibs; fib++) {
 			memset(&t, 0, sizeof(t));
@@ -324,11 +337,13 @@ static void *processing_thread(void *arg)
 				if (a->one_shot) {
 					do_exit = 1;
 					rtlsdr_cancel_async(dev);
+					free(frame_buf);
 					return NULL;
 				}
 			}
 		}
 	}
+	free(frame_buf);
 	return NULL;
 }
 
