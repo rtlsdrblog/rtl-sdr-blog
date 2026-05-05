@@ -238,8 +238,8 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 			s->prev_carriers[i] = s->fft_out[i];
 
 			kk = rev_freq_deint[k];
-			soft_bits[kk]         = (dr > 0) ? 0 : 1;
-			soft_bits[DAB_K + kk] = (di > 0) ? 1 : 0;
+			soft_bits[kk]         = (dr > 0) ? 1 : 0;
+			soft_bits[DAB_K + kk] = (di > 0) ? 0 : 1;
 			k++;
 		}
 	} else {

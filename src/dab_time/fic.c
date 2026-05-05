@@ -19,7 +19,7 @@
 /* PI_16: 1110 repeating (keep 3 of 4) */
 /* PI_15: 1110 × 7, then 1100 (keep 23 of 32) */
 
-static void fic_depuncture(uint8_t *obuf, uint8_t *inbuf)
+void fic_depuncture(uint8_t *obuf, uint8_t *inbuf)
 {
 	int i, j;
 
@@ -56,7 +56,7 @@ static void fic_depuncture(uint8_t *obuf, uint8_t *inbuf)
 
 /* ─── PRBS for energy dispersal ──────────────────────────────────────── */
 
-static void dab_descramble_bytes(uint8_t *buf, int len)
+void dab_descramble_bytes(uint8_t *buf, int len)
 {
 	uint16_t reg = 0x1FF;
 	int i, j, bit;
@@ -71,7 +71,7 @@ static void dab_descramble_bytes(uint8_t *buf, int len)
 
 /* ─── CRC-16 for FIB (on packed bytes) ───────────────────────────────── */
 
-static int check_fib_crc(uint8_t *fib)
+int check_fib_crc(uint8_t *fib)
 {
 	uint16_t crc = 0xFFFF;
 	int i, j;
