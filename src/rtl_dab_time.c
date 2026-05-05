@@ -148,11 +148,18 @@ static pthread_mutex_t buf_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t buf_ready = PTHREAD_COND_INITIALIZER;
 static int buf_ready_flag = 0;
 
+static int cb_count = 0;
+
 static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 {
 	uint32_t i;
 	(void)ctx;
 	if (do_exit) return;
+
+	if (cb_count < 3) {
+		fprintf(stderr, "[cb %d len=%u fill=%d]\n", cb_count, len, sample_buf_fill);
+		cb_count++;
+	}
 
 	pthread_mutex_lock(&buf_mutex);
 	for (i = 0; i < len && sample_buf_fill < BUF_LEN * 2; i += 2) {
@@ -266,6 +273,8 @@ static void *processing_thread(void *arg)
 	int null_pos, valid_fibs;
 	int frames_without_sync = 0;
 	int soft_bits_len = 0;
+
+	fprintf(stderr, "[proc thread started]\n");
 
 	frame_buf = (cfloat *)malloc(BUF_LEN * sizeof(cfloat));
 	if (!frame_buf) {
