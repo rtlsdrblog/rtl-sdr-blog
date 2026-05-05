@@ -514,8 +514,11 @@ int main(int argc, char **argv)
 		sample_buf_fill = 0;
 		buf_ready_flag = 0;
 
+		cb_count = 0;
 		pthread_create(&proc_thread, NULL, processing_thread, &args);
-		r = rtlsdr_read_async(dev, rtlsdr_callback, NULL, 0, 8192);
+		fprintf(stderr, "[calling read_async dev=%p]\n", (void*)dev);
+		r = rtlsdr_read_async(dev, rtlsdr_callback, NULL, 0, 16384);
+		fprintf(stderr, "[read_async returned %d]\n", r);
 		pthread_mutex_lock(&buf_mutex);
 		buf_ready_flag = 1;
 		pthread_cond_signal(&buf_ready);
