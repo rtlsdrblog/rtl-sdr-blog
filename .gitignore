@@ -5,6 +5,11 @@ Makefile.in
 *.o
 *.lo
 *.la
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
 *.pc
 aclocal.m4
 acinclude.m4
@@ -34,6 +39,16 @@ doc/
 
 src/rtl_sdr
 src/rtl_tcp
+src/rtl_test
+src/rtl_fm
+src/rtl_eeprom
+src/rtl_adsb
+src/rtl_power
+src/rtl_biast
+src/rtl_rds_time
+src/rtl_dab_time
+
+build/
 
 CMakeCache.txt
 */CMakeFiles
