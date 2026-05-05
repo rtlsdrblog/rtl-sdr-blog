@@ -1,8 +1,9 @@
 /*
  * ofdm.c - Minimal OFDM demodulator for DAB Mode I
  *
- * Implements: null symbol detection, coarse/fine frequency sync,
- * FFT, DQPSK demodulation of FIC carriers only.
+ * Based on the approach from welle.io (Jan van Katwijk / Matthias P. Braendli)
+ * Implements: null symbol detection, FFT, DQPSK demodulation with
+ * frequency de-interleaving.
  */
 
 #include <string.h>
@@ -13,49 +14,6 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-
-/* ─── Phase Reference Symbol (PRS) table for Mode I ─────────────────
- * From ETSI EN 300 401, Table 44. h values for carriers -768..+768
- * We store the phase index (0-3) for each carrier k, phase = h[k]*pi/2
- * Full table has 1536 entries. We generate from the specification's
- * algorithm using the primitive polynomial. */
-
-/* h_i,j parameters from Table 44 (Mode I) */
-static const int prs_h[4][32] = {
-	{0,2,0,0,0,0,1,1,2,0,0,0,2,2,1,1,0,2,0,0,0,0,1,1,2,0,0,0,2,2,1,1},
-	{0,3,2,3,0,1,3,0,2,1,2,3,2,3,3,0,0,3,2,3,0,1,3,0,2,1,2,3,2,3,3,0},
-	{0,0,0,2,0,2,1,3,2,2,0,2,2,0,1,3,0,0,0,2,0,2,1,3,2,2,0,2,2,0,1,3},
-	{0,1,2,1,0,3,3,2,2,3,2,1,2,1,3,2,0,1,2,1,0,3,3,2,2,3,2,1,2,1,3,2}
-};
-
-static int prs_phase_index(int k)
-{
-	/* Compute phase for carrier k (-768 to +768, excluding 0) */
-	int kp, i, n;
-	if (k < 0) kp = k + 1536;
-	else kp = k;
-
-	i = (kp - 1) / 32;
-	n = (kp - 1) % 32;
-
-	if (i < 0 || i >= 48 || n < 0 || n >= 32) return 0;
-
-	/* Simplified: use h table with wrapping */
-	return prs_h[i % 4][n];
-}
-
-void prs_generate(cfloat *prs_carriers)
-{
-	int k, idx;
-	double phase;
-	/* Generate reference carriers for k = -768..-1, 1..768 */
-	for (k = -768; k <= 768; k++) {
-		if (k == 0) continue;
-		idx = (k < 0) ? k + 768 : k + 767;  /* map to 0..1535 */
-		phase = (double)prs_phase_index(k) * M_PI / 2.0;
-		prs_carriers[idx] = cosf((float)phase) + I * sinf((float)phase);
-	}
-}
 
 /* ─── Radix-2 DIT FFT ───────────────────────────────────────────────── */
 
@@ -104,28 +62,67 @@ void ofdm_fft(cfloat *in, cfloat *out, int n, int inverse)
 	}
 }
 
+/* ─── Frequency Interleaving Table (Mode I) ─────────────────────────
+ * EN 300 401 §14.6
+ * mapIn(i) returns the FFT bin index for logical carrier i.
+ * Values range from -768..+768 (excluding 0).
+ * For negative values, add T_u to get the actual FFT array index. */
+
+static int16_t freq_interleave_map[DAB_K];
+static int freq_interleave_init_done = 0;
+
+static void init_freq_interleave(void)
+{
+	int i, j;
+	int16_t tmp[2048];
+	int T_u = DAB_T_U;  /* 2048 */
+	int K = DAB_K;       /* 1536 */
+	int V1 = 511;
+	int lwb = 256;
+	int upb = 256 + K;  /* 1792 */
+
+	if (freq_interleave_init_done) return;
+
+	/* Generate permutation sequence */
+	tmp[0] = 0;
+	for (i = 1; i < T_u; i++)
+		tmp[i] = (13 * tmp[i - 1] + V1) % T_u;
+
+	/* Map: keep only entries in [lwb, upb), subtract T_u/2 to center */
+	j = 0;
+	for (i = 0; i < T_u; i++) {
+		if (tmp[i] == T_u / 2)
+			continue;
+		if (tmp[i] < lwb || tmp[i] > upb)
+			continue;
+		freq_interleave_map[j] = tmp[i] - T_u / 2;
+		j++;
+	}
+
+	freq_interleave_init_done = 1;
+}
+
 /* ─── OFDM Init ─────────────────────────────────────────────────────── */
 
 void ofdm_init(struct ofdm_state *s)
 {
 	memset(s, 0, sizeof(*s));
+	init_freq_interleave();
 }
 
 /* ─── Null Symbol Detection ──────────────────────────────────────────
- * The null symbol has significantly lower power than data symbols.
- * We detect it by finding a power dip in the input stream. */
+ * The null symbol has significantly lower power than data symbols. */
 
 int ofdm_find_null(cfloat *samples, int len)
 {
 	int i, best_pos = -1;
 	float power, min_power = 1e30f;
 	float avg_power = 0.0f;
-	int window = DAB_T_NULL / 4;  /* Use quarter-null for detection */
+	int window = DAB_T_NULL / 4;
 	int num_windows = 0;
 
 	if (len < DAB_T_NULL + DAB_T_S) return -1;
 
-	/* Compute running power in windows */
 	for (i = 0; i < len - window; i += window / 2) {
 		int j;
 		power = 0.0f;
@@ -145,132 +142,78 @@ int ofdm_find_null(cfloat *samples, int len)
 	if (num_windows == 0) return -1;
 	avg_power /= num_windows;
 
-	/* Null symbol should be significantly below average.
-	 * Use 3dB threshold (0.5) — more tolerant of weak signals
-	 * and AGC transients than the theoretical 10+dB null depth. */
 	if (avg_power > 0.0f && min_power < avg_power * 0.5f) {
 		return best_pos;
 	}
 	return -1;
 }
 
-/* ─── Fine Frequency Offset Estimation ───────────────────────────────
- * Uses the cyclic prefix correlation of the PRS symbol */
+/* ─── Process PRS (Phase Reference Symbol) ───────────────────────────
+ * Store the raw FFT output as phase reference for DQPSK. */
 
-static double estimate_fine_freq(cfloat *symbol_with_cp)
+void ofdm_process_prs(struct ofdm_state *s, cfloat *symbol_time)
 {
-	/* Correlate guard interval with end of symbol */
-	cfloat corr = 0;
-	int i;
-	for (i = 0; i < DAB_T_G; i++) {
-		corr += symbol_with_cp[i] * conjf(symbol_with_cp[i + DAB_T_U]);
-	}
-	return cargf(corr) / (2.0 * M_PI * DAB_T_U) * DAB_SAMPLE_RATE;
+	/* FFT the useful part (skip guard interval) */
+	ofdm_fft(symbol_time + DAB_T_G, s->fft_out, DAB_T_U, 0);
+	/* Store as phase reference */
+	memcpy(s->prev_carriers, s->fft_out, DAB_T_U * sizeof(cfloat));
+	s->symbol_count = 1;
 }
 
-/* ─── Frequency Interleaving Table (Mode I, 1536 carriers) ──────────
- * EN 300 401 §14.6: π(i) = (13 × π(i-1) + 511) mod 2048, π(0) = 0
- * Only values in [256..1791] map to active carriers (1536 total).
- * freq_deinterleave[physical_carrier] = logical_bit_position */
-
-static int freq_deinterleave[DAB_K];
-static int freq_interleave_init = 0;
-
-static void init_freq_interleave(void)
-{
-	int i, j, pi;
-	int table[2048];  /* Full permutation sequence */
-
-	if (freq_interleave_init) return;
-
-	/* Generate full permutation sequence */
-	table[0] = 0;
-	for (i = 1; i < 2048; i++)
-		table[i] = (13 * table[i - 1] + 511) % 2048;
-
-	/* The interleaver at the transmitter places logical bit j at
-	 * physical carrier position determined by the permutation.
-	 * To de-interleave: freq_deinterleave[logical_pos] = physical_carrier
-	 * Then: soft_bits[logical_pos] = demod[physical_carrier]
-	 *
-	 * Iterate permutation, assign sequential logical indices to
-	 * entries that map to valid carriers (values 256..1791) */
-	j = 0;  /* logical index counter */
-	for (i = 0; i < 2048; i++) {
-		pi = table[i];
-		if (pi >= 256 && pi <= 1791) {
-			/* logical position j maps to physical carrier pi-256 */
-			freq_deinterleave[j] = pi - 256;
-			j++;
-		}
-	}
-
-	freq_interleave_init = 1;
-}
-
-/* ─── DQPSK Demodulation ────────────────────────────────────────────
- * DAB uses Differential QPSK: data is encoded in the phase difference
- * between the same carrier in consecutive symbols. */
+/* ─── DQPSK Demodulation (data symbols) ─────────────────────────────
+ * Following welle.io's approach:
+ * - FFT the symbol
+ * - For each logical carrier i, get FFT bin via interleaver
+ * - Compute differential: fft[bin] * conj(phase_ref[bin])
+ * - Update phase reference
+ * - Output: soft_bits[0..K-1] = -real, soft_bits[K..2K-1] = -imag
+ * Soft bits are in range -127..+127 (stored as int8_t cast to uint8_t) */
 
 void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_bits)
 {
-	int i, k;
-	cfloat carriers[DAB_K];
-	cfloat diff;
+	int i;
+	int16_t index;
+	cfloat r1;
+	float ab1;
 
-	init_freq_interleave();
-
-	/* Remove cyclic prefix and FFT */
+	/* FFT */
 	ofdm_fft(symbol_time + DAB_T_G, s->fft_out, DAB_T_U, 0);
 
-	/* Extract active carriers (k = -768..-1, 1..768)
-	 * In FFT output: negative freqs at indices [T_U-768 .. T_U-1]
-	 *                positive freqs at indices [1 .. 768] */
-	for (k = 0; k < 768; k++) {
-		carriers[k] = s->fft_out[DAB_T_U - 768 + k];       /* k = -768..-1 */
-		carriers[k + 768] = s->fft_out[k + 1];              /* k = 1..768 */
+	if (soft_bits) {
+		for (i = 0; i < DAB_K; i++) {
+			index = freq_interleave_map[i];
+			if (index < 0)
+				index += DAB_T_U;
+
+			/* Differential decode against phase reference */
+			r1 = s->fft_out[index] * conjf(s->prev_carriers[index]);
+
+			/* Update phase reference for this carrier */
+			s->prev_carriers[index] = s->fft_out[index];
+
+			/* Normalize: L1 norm */
+			ab1 = fabsf(crealf(r1)) + fabsf(cimagf(r1));
+			if (ab1 > 0.0f)
+				ab1 = 127.0f / ab1;
+			else
+				ab1 = 0.0f;
+
+			/* Output soft bits: all reals first, then all imags
+			 * Negated per DAB standard convention */
+			int sb_re = (int)(-crealf(r1) * ab1);
+			int sb_im = (int)(-cimagf(r1) * ab1);
+			if (sb_re < -127) sb_re = -127;
+			if (sb_re > 127) sb_re = 127;
+			if (sb_im < -127) sb_im = -127;
+			if (sb_im > 127) sb_im = 127;
+
+			soft_bits[i]         = (uint8_t)(int8_t)sb_re;
+			soft_bits[DAB_K + i] = (uint8_t)(int8_t)sb_im;
+		}
+	} else {
+		/* PRS: just store phase reference */
+		memcpy(s->prev_carriers, s->fft_out, DAB_T_U * sizeof(cfloat));
 	}
 
-	/* DQPSK: compute phase difference with previous symbol */
-	if (s->symbol_count > 0 && soft_bits) {
-		uint8_t raw_bits[DAB_K * 2];
-
-		/* First: compute soft bits in physical carrier order */
-		for (i = 0; i < DAB_K; i++) {
-			int sb0, sb1;
-			float re, im, mag;
-
-			diff = carriers[i] * conjf(s->prev_carriers[i]);
-			re = crealf(diff);
-			im = cimagf(diff);
-
-			mag = sqrtf(re * re + im * im);
-			if (mag > 0.0f) {
-				re /= mag;
-				im /= mag;
-			}
-
-			sb0 = (int)(128.0f - re * 127.0f);
-			sb1 = (int)(128.0f - im * 127.0f);
-			if (sb0 < 0) sb0 = 0;
-			if (sb0 > 255) sb0 = 255;
-			if (sb1 < 0) sb1 = 0;
-			if (sb1 > 255) sb1 = 255;
-
-			raw_bits[i * 2]     = (uint8_t)sb0;
-			raw_bits[i * 2 + 1] = (uint8_t)sb1;
-		}
-
-		/* Then: frequency de-interleave
-		 * freq_deinterleave[logical] = physical carrier index */
-		for (i = 0; i < DAB_K; i++) {
-			int phys = freq_deinterleave[i];
-			soft_bits[i * 2]     = raw_bits[phys * 2];
-			soft_bits[i * 2 + 1] = raw_bits[phys * 2 + 1];
-		}
-	}
-
-	/* Store for next symbol's differential decode */
-	memcpy(s->prev_carriers, carriers, DAB_K * sizeof(cfloat));
 	s->symbol_count++;
 }

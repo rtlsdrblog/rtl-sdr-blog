@@ -45,13 +45,9 @@
 typedef float complex cfloat;
 
 struct ofdm_state {
-	cfloat  fft_in[DAB_T_U];
 	cfloat  fft_out[DAB_T_U];
-	cfloat  prev_carriers[DAB_K];  /* Previous symbol for DQPSK */
-	double  coarse_freq_offset;    /* Hz */
-	double  fine_freq_offset;      /* Hz */
-	int     synced;
-	int     symbol_count;          /* Current symbol in frame */
+	cfloat  prev_carriers[DAB_T_U];  /* Full FFT phase reference */
+	int     symbol_count;
 };
 
 /* FIC decoder state */

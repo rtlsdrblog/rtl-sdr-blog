@@ -316,8 +316,7 @@ static void *processing_thread(void *arg)
 			continue;
 		}
 
-		/* PRS */
-		ofdm.symbol_count = 0;
+		/* PRS - store as phase reference */
 		ofdm_demod_symbol(&ofdm, &frame_buf[pos], NULL);
 		pos += DAB_T_S;
 

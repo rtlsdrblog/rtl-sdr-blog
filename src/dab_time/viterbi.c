@@ -4,8 +4,8 @@
  * DAB FIC uses a rate 1/4, constraint length 7 convolutional code.
  * Generator polynomials (octal): 133, 171, 145, 133
  *
- * This is a minimal soft-decision Viterbi decoder optimized for the
- * FIC channel only (short blocks, no tail-biting needed for our purpose).
+ * Soft bit convention: 0 = strong "1", 255 = strong "0", 128 = uncertain
+ * Output: one decoded bit per byte (0 or 1)
  */
 
 #include <string.h>
@@ -19,8 +19,8 @@
 /* Generator polynomials for DAB (octal notation) */
 static const int polys[RATE] = {0133, 0171, 0145, 0133};
 
-/* Precomputed output bits for each state and input bit */
-static uint8_t output_table[NUM_STATES][2][RATE];
+/* Precomputed: expected soft-bit value (0 or 255) for each state/input/poly */
+static uint8_t expected_output[NUM_STATES][2][RATE];
 static int tables_initialized = 0;
 
 static void init_tables(void)
@@ -37,21 +37,20 @@ static void init_tables(void)
 					if (polys[poly] & (1 << j))
 						bit ^= (reg >> j) & 1;
 				}
-				output_table[state][input][poly] = bit;
+				/* If encoder output bit is 1, expected soft value is 0
+				 * If encoder output bit is 0, expected soft value is 255 */
+				expected_output[state][input][poly] = bit ? 0 : 255;
 			}
 		}
 	}
 	tables_initialized = 1;
 }
 
-/* Branch metric: Hamming-like distance between received soft bits and expected.
- * Soft bits: 0 = confident 1, 255 = confident 0, 128 = uncertain.
- * Expected: 0 or 255 in same convention.
- * Lower metric = better match. */
-static int branch_metric(uint8_t *received, uint8_t *expected, int n)
+/* Branch metric: sum of |received - expected| for each of RATE bits */
+static int branch_metric(uint8_t *received, uint8_t *expected)
 {
 	int i, metric = 0;
-	for (i = 0; i < n; i++) {
+	for (i = 0; i < RATE; i++) {
 		int diff = (int)received[i] - (int)expected[i];
 		if (diff < 0) diff = -diff;
 		metric += diff;
@@ -59,16 +58,16 @@ static int branch_metric(uint8_t *received, uint8_t *expected, int n)
 	return metric;
 }
 
+/* Viterbi decode
+ * input: soft bits (0-255), length = input_len (must be multiple of RATE)
+ * output: decoded bits, one per byte (0 or 1), length = output_bits */
 void viterbi_decode(uint8_t *input, int input_len, uint8_t *output, int output_bits)
 {
-	/* Path metrics and traceback */
 	int num_symbols = input_len / RATE;
-	int *pm_cur, *pm_prev;
-	uint8_t *traceback;  /* [num_symbols][NUM_STATES] */
+	int *pm_cur, *pm_prev, *tmp;
+	uint8_t *traceback;
 	int state, next_state, sym, input_bit;
 	int metric, new_metric;
-	uint8_t expected[RATE];
-	int i;
 
 	if (num_symbols <= 0) return;
 	init_tables();
@@ -77,6 +76,11 @@ void viterbi_decode(uint8_t *input, int input_len, uint8_t *output, int output_b
 	pm_prev = (int *)malloc(NUM_STATES * sizeof(int));
 	traceback = (uint8_t *)malloc(num_symbols * NUM_STATES);
 
+	if (!pm_cur || !pm_prev || !traceback) {
+		free(pm_cur); free(pm_prev); free(traceback);
+		return;
+	}
+
 	/* Initialize: start in state 0 */
 	for (state = 0; state < NUM_STATES; state++)
 		pm_prev[state] = INT_MAX / 2;
@@ -84,7 +88,6 @@ void viterbi_decode(uint8_t *input, int input_len, uint8_t *output, int output_b
 
 	/* Forward pass */
 	for (sym = 0; sym < num_symbols; sym++) {
-		int *tmp;
 		for (state = 0; state < NUM_STATES; state++)
 			pm_cur[state] = INT_MAX / 2;
 
@@ -92,14 +95,10 @@ void viterbi_decode(uint8_t *input, int input_len, uint8_t *output, int output_b
 			if (pm_prev[state] >= INT_MAX / 2) continue;
 
 			for (input_bit = 0; input_bit < 2; input_bit++) {
-				/* Shift register: input enters at MSB (bit 5 of 6-bit state) */
 				next_state = (state >> 1) | (input_bit << (VITERBI_K - 2));
 
-				/* Compute branch metric */
-				for (i = 0; i < RATE; i++)
-					expected[i] = output_table[state][input_bit][i] ? 0 : 255;
-
-				metric = branch_metric(&input[sym * RATE], expected, RATE);
+				metric = branch_metric(&input[sym * RATE],
+				                       expected_output[state][input_bit]);
 				new_metric = pm_prev[state] + metric;
 
 				if (new_metric < pm_cur[next_state]) {
@@ -109,7 +108,6 @@ void viterbi_decode(uint8_t *input, int input_len, uint8_t *output, int output_b
 			}
 		}
 
-		/* Swap */
 		tmp = pm_prev;
 		pm_prev = pm_cur;
 		pm_cur = tmp;
@@ -126,14 +124,13 @@ void viterbi_decode(uint8_t *input, int input_len, uint8_t *output, int output_b
 		}
 
 		/* Traceback */
-		memset(output, 0, (output_bits + 7) / 8);
+		memset(output, 0, output_bits);
 		state = best_state;
 		for (sym = num_symbols - 1; sym >= 0; sym--) {
 			int prev_state = traceback[sym * NUM_STATES + state];
-			/* The input bit that caused transition prev_state -> state */
 			int decoded_bit = (state >> (VITERBI_K - 2)) & 1;
 			if (sym < output_bits) {
-				output[sym / 8] |= (decoded_bit << (7 - (sym % 8)));
+				output[sym] = decoded_bit;
 			}
 			state = prev_state;
 		}
