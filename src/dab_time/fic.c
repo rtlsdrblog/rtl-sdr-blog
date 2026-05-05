@@ -58,7 +58,8 @@ static uint16_t crc16_fib(uint8_t *data, int len)
 }
 
 /* ─── Energy Dispersal (PRBS) ────────────────────────────────────────
- * XOR with PRBS sequence: x^9 + x^5 + 1, init = 0x1FF */
+ * XOR with PRBS sequence: x^9 + x^5 + 1, init = 0x1FF
+ * Runs continuously across the full block (not reset per FIB) */
 
 static void energy_dispersal(uint8_t *data, int len)
 {
@@ -126,13 +127,33 @@ int fic_decode(uint8_t *soft_bits, int len, uint8_t *fib_data)
 		/* Viterbi decode: 3072 soft bits (rate 1/4) → 768 bits = 96 bytes */
 		viterbi_decode(depunctured, dp_len, decoded, 768);
 
+		/* Debug: print first bytes of first sub-channel */
+		if (subch == 0) {
+			int d;
+			fprintf(stderr, "\n[DBG] Viterbi out: ");
+			for (d = 0; d < 16; d++)
+				fprintf(stderr, "%02X ", decoded[d]);
+			fprintf(stderr, "\n");
+		}
+
+		/* Energy dispersal on full sub-channel (96 bytes = 3 FIBs) */
+		energy_dispersal(decoded, 96);
+
+		/* Debug: print after energy dispersal */
+		if (subch == 0) {
+			int d;
+			fprintf(stderr, "[DBG] After PRBS:  ");
+			for (d = 0; d < 16; d++)
+				fprintf(stderr, "%02X ", decoded[d]);
+			fprintf(stderr, "\n");
+			/* Print CRC bytes */
+			fprintf(stderr, "[DBG] CRC bytes: %02X %02X, calc: %04X\n",
+				decoded[30], decoded[31], crc16_fib(decoded, 30));
+		}
+
 		/* Process 3 FIBs from this sub-channel */
 		for (fib = 0; fib < FIC_FIBS_PER_SUBCH; fib++) {
-			uint8_t fib_bytes[32];
-			memcpy(fib_bytes, &decoded[fib * 32], 32);
-
-			/* Energy dispersal */
-			energy_dispersal(fib_bytes, 32);
+			uint8_t *fib_bytes = &decoded[fib * 32];
 
 			/* CRC check: bytes 0-29 = data, bytes 30-31 = CRC */
 			crc_calc = crc16_fib(fib_bytes, 30);
