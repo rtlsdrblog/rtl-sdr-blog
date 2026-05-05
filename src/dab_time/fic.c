@@ -1,224 +1,126 @@
 /*
- * fic.c - FIC (Fast Information Channel) decoder for DAB
+ * fic.c - FIC decoder for DAB, ported from dabtools
  *
- * Based on welle.io's fic-handler approach.
- * Handles: depuncturing (PI_16 + PI_15 + PI_X), Viterbi decoding,
- * energy dispersal, CRC-16 check, and FIG 0/10 parsing.
+ * Uses hard-decision DQPSK demapping and dabtools Viterbi convention:
+ * - Input bits: 0 or 1
+ * - Viterbi symbols: 127 = "0", 129 = "1", 128 = erasure
  */
 
 #include <string.h>
 #include <stdio.h>
 #include "dab_time.h"
 
-/* ─── Puncturing tables from EN 300 401 ─────────────────────────────── */
+/* ─── Viterbi symbol convention (dabtools) ───────────────────────────── */
+#define VITERBI_OFFSET 128
+#define VITERBI_SYM(x) ((x) ? 129 : 127)
 
-/* PI_16: period 32, keeps 24 of 32 */
-static const uint8_t PI_16[32] = {
-	1,1,1,0, 1,1,1,0, 1,1,1,0, 1,1,1,0,
-	1,1,1,0, 1,1,1,0, 1,1,1,0, 1,1,1,0
-};
+/* ─── Puncturing tables ──────────────────────────────────────────────── */
 
-/* PI_15: period 32, keeps 23 of 32 */
-static const uint8_t PI_15[32] = {
-	1,1,1,0, 1,1,1,0, 1,1,1,0, 1,1,1,0,
-	1,1,1,0, 1,1,1,0, 1,1,1,0, 1,1,0,0
-};
+/* PI_16: 1110 repeating (keep 3 of 4) */
+/* PI_15: 1110 × 7, then 1100 (keep 23 of 32) */
 
-/* PI_X: 24 bits for tail */
-static const uint8_t PI_X[24] = {
-	1,1,0,0, 1,1,0,0, 1,1,0,0,
-	1,1,0,0, 1,1,0,0, 1,1,0,0
-};
-
-/* ─── PRBS for energy dispersal ──────────────────────────────────────
- * x^9 + x^5 + 1, init all 1s, operates on individual bits */
-
-static uint8_t PRBS[768];
-static int prbs_init_done = 0;
-
-static void init_prbs(void)
+static void fic_depuncture(uint8_t *obuf, uint8_t *inbuf)
 {
-	uint8_t shift_reg[9];
-	int i;
+	int i, j;
 
-	if (prbs_init_done) return;
-
-	memset(shift_reg, 1, 9);
-	for (i = 0; i < 768; i++) {
-		PRBS[i] = shift_reg[8] ^ shift_reg[4];
-		int feedback = PRBS[i];
-		int j;
-		for (j = 8; j > 0; j--)
-			shift_reg[j] = shift_reg[j - 1];
-		shift_reg[0] = feedback;
+	/* 21 blocks of PI_16: for each group of 4, keep 3, insert 1 erasure */
+	for (i = 0; i < 21 * 128; i += 32) {
+		for (j = 0; j < 8; j++) {
+			*(obuf++) = VITERBI_SYM(*(inbuf++));
+			*(obuf++) = VITERBI_SYM(*(inbuf++));
+			*(obuf++) = VITERBI_SYM(*(inbuf++));
+			*(obuf++) = VITERBI_OFFSET;
+		}
 	}
-	prbs_init_done = 1;
+	/* 3 blocks of PI_15: 7 groups of (keep 3, drop 1) + 1 group of (keep 2, drop 2) */
+	for (i = 21 * 128; i < 24 * 128; i += 32) {
+		for (j = 0; j < 7; j++) {
+			*(obuf++) = VITERBI_SYM(*(inbuf++));
+			*(obuf++) = VITERBI_SYM(*(inbuf++));
+			*(obuf++) = VITERBI_SYM(*(inbuf++));
+			*(obuf++) = VITERBI_OFFSET;
+		}
+		*(obuf++) = VITERBI_SYM(*(inbuf++));
+		*(obuf++) = VITERBI_SYM(*(inbuf++));
+		*(obuf++) = VITERBI_OFFSET;
+		*(obuf++) = VITERBI_OFFSET;
+	}
+	/* Tail: 6 groups of (keep 2, drop 2) */
+	for (j = 0; j < 6; j++) {
+		*(obuf++) = VITERBI_SYM(*(inbuf++));
+		*(obuf++) = VITERBI_SYM(*(inbuf++));
+		*(obuf++) = VITERBI_OFFSET;
+		*(obuf++) = VITERBI_OFFSET;
+	}
 }
 
-/* ─── CRC-16 on bits ─────────────────────────────────────────────────
- * Polynomial: x^16 + x^12 + x^5 + 1, init 0xFFFF
- * Operates on a bit array (one bit per byte) */
+/* ─── PRBS for energy dispersal ──────────────────────────────────────── */
 
-static int check_crc_bits(uint8_t *bits, int nbits)
+static void dab_descramble_bytes(uint8_t *buf, int len)
+{
+	uint16_t reg = 0x1FF;
+	int i, j, bit;
+	for (i = 0; i < len; i++) {
+		for (j = 7; j >= 0; j--) {
+			bit = ((reg >> 8) ^ (reg >> 4)) & 1;
+			buf[i] ^= (bit << j);
+			reg = ((reg << 1) | bit) & 0x1FF;
+		}
+	}
+}
+
+/* ─── CRC-16 for FIB (on packed bytes) ───────────────────────────────── */
+
+static int check_fib_crc(uint8_t *fib)
 {
 	uint16_t crc = 0xFFFF;
-	int i;
-	/* CRC covers first nbits-16 bits, last 16 bits are the CRC value */
-	for (i = 0; i < nbits - 16; i++) {
-		int bit = bits[i] & 1;
-		if ((crc >> 15) ^ bit)
-			crc = (crc << 1) ^ 0x1021;
-		else
-			crc = crc << 1;
-		crc &= 0xFFFF;
+	int i, j;
+	/* CRC over first 30 bytes */
+	for (i = 0; i < 30; i++) {
+		crc ^= (uint16_t)fib[i] << 8;
+		for (j = 0; j < 8; j++) {
+			if (crc & 0x8000)
+				crc = (crc << 1) ^ 0x1021;
+			else
+				crc <<= 1;
+		}
 	}
 	crc ^= 0xFFFF;
-
-	/* Compare with received CRC (last 16 bits) */
-	uint16_t recv_crc = 0;
-	for (i = nbits - 16; i < nbits; i++)
-		recv_crc = (recv_crc << 1) | (bits[i] & 1);
-
-	return crc == recv_crc;
+	/* Compare with bytes 30-31 */
+	uint16_t recv = ((uint16_t)fib[30] << 8) | fib[31];
+	return crc == recv;
 }
 
 /* ─── FIC Decode ─────────────────────────────────────────────────────
- * Input: 2304 soft bits (int8_t stored as uint8_t, range -127..+127)
- * Process: depuncture → 3096 soft bits → Viterbi → 768 bits → 3 FIBs
- * Returns number of valid FIBs (0-3). fib_data gets 30 bytes per valid FIB. */
-
-static int fic_decode_block(const uint8_t *ficblock, uint8_t *fib_data)
-{
-	uint8_t viterbi_input[3096 + 24];  /* depunctured: 3072 + 24 tail */
-	uint8_t decoded_bits[768];
-	int input_counter = 0;
-	int local = 0;
-	int i, k;
-	int valid_fibs = 0;
-
-	memset(viterbi_input, 128, sizeof(viterbi_input));  /* 128 = uncertain (after +127 shift) */
-
-	/* Depuncture: 21 blocks of PI_16 (128 coded bits each) */
-	for (i = 0; i < 21; i++) {
-		for (k = 0; k < 128; k++) {
-			if (PI_16[k % 32]) {
-				/* Convert from signed (-127..+127) to unsigned (0..255) for Viterbi
-				 * welle.io convention: -127 (strong 1) → 0, +127 (strong 0) → 254 */
-				viterbi_input[local] = (uint8_t)((int8_t)ficblock[input_counter] + 127);
-				input_counter++;
-			} else {
-				viterbi_input[local] = 128;  /* Erasure */
-			}
-			local++;
-		}
-	}
-
-	/* 3 blocks of PI_15 */
-	for (i = 0; i < 3; i++) {
-		for (k = 0; k < 128; k++) {
-			if (PI_15[k % 32]) {
-				viterbi_input[local] = (uint8_t)((int8_t)ficblock[input_counter] + 127);
-				input_counter++;
-			} else {
-				viterbi_input[local] = 128;
-			}
-			local++;
-		}
-	}
-
-	/* 24 tail bits with PI_X */
-	for (k = 0; k < 24; k++) {
-		if (PI_X[k]) {
-			viterbi_input[local] = (uint8_t)((int8_t)ficblock[input_counter] + 127);
-			input_counter++;
-		} else {
-			viterbi_input[local] = 128;
-		}
-		local++;
-	}
-
-	/* Viterbi decode: 3096 soft bits → 768 data bits */
-	viterbi_decode(viterbi_input, local, decoded_bits, 768);
-	{int zz; fprintf(stderr,"[depunc first 8: "); for(zz=0;zz<8;zz++) fprintf(stderr,"%d ",viterbi_input[zz]); fprintf(stderr,"]\n");}
-
-	/* Debug: show first 16 decoded bits as a hex byte pair */
-	{
-		static int dbg_count = 0; fprintf(stderr, "null@%d pos=%d] ", 0, 0);
-		if (dbg_count < 2) {
-			int d;
-			uint8_t byte;
-			/* Show soft bit distribution */
-			int hist[4] = {0,0,0,0};  /* <32, 32-127, 128-223, >223 */
-			for (d = 0; d < 2304; d++) {
-				uint8_t v = viterbi_input[d];
-				if (v < 32) hist[0]++;
-				else if (v < 128) hist[1]++;
-				else if (v < 224) hist[2]++;
-				else hist[3]++;
-			}
-			fprintf(stderr, "\n[FIC] soft dist: <32:%d 32-127:%d 128-223:%d >223:%d\n",
-				hist[0], hist[1], hist[2], hist[3]);
-			fprintf(stderr, "[FIC] depunc=%d vit_out: ", local);
-			for (d = 0; d < 8; d++) {
-				byte = 0;
-				int b2;
-				for (b2 = 0; b2 < 8; b2++)
-					byte = (byte << 1) | (decoded_bits[d*8+b2] & 1);
-				fprintf(stderr, "%02X ", byte);
-			}
-			fprintf(stderr, "\n");
-			dbg_count++;
-		}
-	}
-
-	/* Energy dispersal (XOR with PRBS, bit-level) */
-	for (i = 0; i < 768; i++)
-		decoded_bits[i] ^= PRBS[i];
-
-	/* Check 3 FIBs (each 256 bits = 30 data bytes + 2 CRC bytes) */
-	for (i = 0; i < 3; i++) {
-		uint8_t *fib_bits = &decoded_bits[i * 256];
-
-		if (check_crc_bits(fib_bits, 256)) {
-			/* Pack bits into bytes (30 data bytes) */
-			int b, bit;
-			uint8_t *out = &fib_data[valid_fibs * 30];
-			for (b = 0; b < 30; b++) {
-				uint8_t byte = 0;
-				for (bit = 0; bit < 8; bit++)
-					byte = (byte << 1) | (fib_bits[b * 8 + bit] & 1);
-				out[b] = byte;
-			}
-			valid_fibs++;
-		}
-	}
-
-	return valid_fibs;
-}
-
-/* ─── FIC Decode (full frame) ────────────────────────────────────────
- * Takes soft bits from 3 FIC OFDM symbols.
- * Each symbol provides 2*K = 3072 soft bits.
- * Total: 9216 soft bits → 4 blocks of 2304 → decode each.
- * Returns total valid FIBs (0-12). */
+ * Input: 9216 hard-decision bits (0 or 1) from 3 FIC symbols
+ * Split into 4 blocks of 2304, each decoded to 3 FIBs (96 bytes)
+ * Returns number of valid FIBs. fib_data gets 30 bytes per valid FIB. */
 
 int fic_decode(uint8_t *soft_bits, int len, uint8_t *fib_data)
 {
+	uint8_t depunctured[3096];
+	uint8_t decoded[96];  /* 768 bits packed into 96 bytes */
 	int total_valid = 0;
-	int block;
-	int index = 0;
-	uint8_t ofdm_input[2304];
-	int ofdm_idx = 0;
+	int block, fib;
 
-	init_prbs();
+	if (len < 9216) return 0;
 
-	/* Collect soft bits into 2304-bit blocks and decode each */
-	for (index = 0; index < len; index++) {
-		ofdm_input[ofdm_idx++] = soft_bits[index];
-		if (ofdm_idx >= 2304) {
-			int n = fic_decode_block(ofdm_input, &fib_data[total_valid * 30]);
-			total_valid += n;
-			ofdm_idx = 0;
+	for (block = 0; block < 4; block++) {
+		/* Depuncture: 2304 bits → 3096 symbols */
+		fic_depuncture(depunctured, &soft_bits[block * 2304]);
+
+		/* Viterbi decode: 3096 symbols → 768 bits → 96 bytes */
+		viterbi_decode(depunctured, 3096, decoded, 768);
+
+		/* Energy dispersal (descramble) on 96 bytes */
+		dab_descramble_bytes(decoded, 96);
+
+		/* Check CRC of 3 FIBs (each 32 bytes) */
+		for (fib = 0; fib < 3; fib++) {
+			if (check_fib_crc(&decoded[fib * 32])) {
+				memcpy(&fib_data[total_valid * 30], &decoded[fib * 32], 30);
+				total_valid++;
+			}
 		}
 	}
 
@@ -228,12 +130,9 @@ int fic_decode(uint8_t *soft_bits, int len, uint8_t *fib_data)
 void fic_init(struct fic_state *s)
 {
 	memset(s, 0, sizeof(*s));
-	init_prbs();
 }
 
-/* ─── FIG 0/10 Parser (Date and Time) ────────────────────────────────
- * FIG type 0, extension 10
- * Input: 30 bytes of FIB data (packed) */
+/* ─── FIG 0/10 Parser ────────────────────────────────────────────────── */
 
 int fig_parse_time(uint8_t *fib, int fib_len, struct dab_time *t)
 {
@@ -247,8 +146,7 @@ int fig_parse_time(uint8_t *fib, int fib_len, struct dab_time *t)
 		fig_len = fib[pos] & 0x1F;
 		pos++;
 
-		if (fig_type == 7 && fig_len == 31)
-			break;  /* End marker */
+		if (fig_type == 7 && fig_len == 31) break;
 
 		if (fig_type == 0 && pos + fig_len <= fib_len) {
 			fig_ext = fib[pos] & 0x1F;
@@ -279,7 +177,6 @@ int fig_parse_time(uint8_t *fib, int fib_len, struct dab_time *t)
 				if (mjd < 40000 || mjd > 80000)
 					return 0;
 
-				/* MJD to calendar date */
 				yp = (double)((int)mjd - 15078.2) / 365.25;
 				mp = (double)((int)mjd - 14956.1 - (int)(yp * 365.25)) / 30.6001;
 				t->day = (int)mjd - 14956 - (int)(yp * 365.25) - (int)(mp * 30.6001);

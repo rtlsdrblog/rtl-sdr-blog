@@ -70,7 +70,7 @@ int main(int argc, char **argv)
 		}
 
 		/* PRS */
-		ofdm.freq_offset = -399.7f; fprintf(stderr,"[using -399.7 Hz]\n"); ofdm_demod_symbol(&ofdm, &samples[pos], NULL);
+		ofdm.freq_offset = 0; ofdm_demod_symbol(&ofdm, &samples[pos], NULL);
 		pos += DAB_T_S;
 
 		/* FIC symbols */

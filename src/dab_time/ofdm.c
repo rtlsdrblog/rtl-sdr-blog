@@ -194,9 +194,6 @@ void ofdm_process_prs(struct ofdm_state *s, cfloat *symbol_time)
 void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_bits)
 {
 	int i;
-	int16_t index;
-	cfloat r1;
-	float ab1;
 	cfloat corrected[DAB_T_U];
 
 	/* Apply fine frequency correction before FFT */
@@ -208,50 +205,41 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 	/* FFT */
 	ofdm_fft(corrected, s->fft_out, DAB_T_U, 0);
 
-	if (soft_bits) {
-		/* Iterate carriers in dabtools order but with UN-shifted FFT:
-		 * dabtools shifts FFT so DC is at bin 1024.
-		 * Without shift: DC at bin 0, neg freq at 1025..2047, pos at 1..1023.
-		 * dabtools bins 256..1023 (neg after shift) = our bins 1280..2047
-		 * dabtools bins 1025..1792 (pos after shift) = our bins 1..768
-		 * Combined: iterate our bins 1280..2047, then 1..768 (skip 0=DC) */
-		int k = 0;
-		/* Negative frequencies: bins 1280..2047 (= dabtools 256..1023) */
-		for (i = 1280; i < 2048; i++) {
-			int kk;
-			r1 = s->fft_out[i] * conjf(s->prev_carriers[i]);
-			s->prev_carriers[i] = s->fft_out[i];
-
-			ab1 = fabsf(crealf(r1)) + fabsf(cimagf(r1));
-			if (ab1 > 0.0f) ab1 = 127.0f / ab1; else ab1 = 0.0f;
-
-			int sb_re = (int)(-crealf(r1) * ab1);
-			int sb_im = (int)(cimagf(r1) * ab1);
-			if (sb_re < -127) sb_re = -127; if (sb_re > 127) sb_re = 127;
-			if (sb_im < -127) sb_im = -127; if (sb_im > 127) sb_im = 127;
-
-			kk = rev_freq_deint[k];
-			soft_bits[kk]         = (uint8_t)(int8_t)sb_re;
-			soft_bits[DAB_K + kk] = (uint8_t)(int8_t)sb_im;
-			k++;
+	/* fftshift: swap first and second half (like dabtools) */
+	{
+		int j;
+		cfloat tmp;
+		for (j = 0; j < DAB_T_U / 2; j++) {
+			tmp = s->fft_out[j];
+			s->fft_out[j] = s->fft_out[j + DAB_T_U / 2];
+			s->fft_out[j + DAB_T_U / 2] = tmp;
 		}
-		/* Positive frequencies: bins 1..768 (= dabtools 1025..1792) */
-		for (i = 1; i <= 768; i++) {
+	}
+
+	if (soft_bits) {
+		/* Iterate FFT bins exactly like dabtools does AFTER its fftshift.
+		 * Since we DON'T fftshift, and DQPSK is differential (cancels
+		 * any constant phase), just iterate bins 256..1792 directly. */
+		int k = 0;
+		for (i = 256; i < 1793; i++) {
 			int kk;
-			r1 = s->fft_out[i] * conjf(s->prev_carriers[i]);
+			float dr, di, denom;
+
+			if (i == 1024) continue;  /* skip DC */
+
+			dr = crealf(s->fft_out[i]) * crealf(s->prev_carriers[i])
+			   + cimagf(s->fft_out[i]) * cimagf(s->prev_carriers[i]);
+			di = crealf(s->fft_out[i]) * cimagf(s->prev_carriers[i])
+			   - cimagf(s->fft_out[i]) * crealf(s->prev_carriers[i]);
+			denom = crealf(s->prev_carriers[i]) * crealf(s->prev_carriers[i])
+			      + cimagf(s->prev_carriers[i]) * cimagf(s->prev_carriers[i]);
+			if (denom > 0) { dr /= denom; di /= denom; }
+
 			s->prev_carriers[i] = s->fft_out[i];
 
-			ab1 = fabsf(crealf(r1)) + fabsf(cimagf(r1));
-			if (ab1 > 0.0f) ab1 = 127.0f / ab1; else ab1 = 0.0f;
-
-			int sb_re = (int)(-crealf(r1) * ab1);
-			int sb_im = (int)(cimagf(r1) * ab1);
-			if (sb_re < -127) sb_re = -127; if (sb_re > 127) sb_re = 127;
-			if (sb_im < -127) sb_im = -127; if (sb_im > 127) sb_im = 127;
-
 			kk = rev_freq_deint[k];
-			soft_bits[kk]         = (uint8_t)(int8_t)sb_re;
-			soft_bits[DAB_K + kk] = (uint8_t)(int8_t)sb_im;
+			soft_bits[kk]         = (dr > 0) ? 0 : 1;
+			soft_bits[DAB_K + kk] = (di > 0) ? 1 : 0;
 			k++;
 		}
 	} else {
