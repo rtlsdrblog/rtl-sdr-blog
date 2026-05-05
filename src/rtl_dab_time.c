@@ -492,11 +492,21 @@ int main(int argc, char **argv)
 		args.active_block = block_name;
 		args.rescan_needed = 0;
 
-		verbose_set_frequency(dev, freq);
-		/* Reset device state fully before async mode */
+		/* Close and reopen device to ensure clean state for async mode
+		 * (sync reads during scan leave device in incompatible state) */
+		rtlsdr_close(dev);
+		r = rtlsdr_open(&dev, (uint32_t)dev_index);
+		if (r < 0) {
+			fprintf(stderr, "Failed to reopen device\n");
+			exit(1);
+		}
+		if (gain == -100) verbose_auto_gain(dev);
+		else verbose_gain_set(dev, gain);
+		verbose_ppm_set(dev, ppm);
+		rtlsdr_set_bias_tee(dev, enable_biastee);
 		rtlsdr_set_sample_rate(dev, DAB_SAMPLE_RATE);
+		verbose_set_frequency(dev, freq);
 		verbose_reset_buffer(dev);
-		usleep(50000);
 
 		fprintf(stderr, "Receiving DAB block %s (%.3f MHz)\n", block_name, freq / 1e6);
 		fprintf(stderr, "Waiting for FIG 0/10 time data...\n\n");
@@ -505,7 +515,7 @@ int main(int argc, char **argv)
 		buf_ready_flag = 0;
 
 		pthread_create(&proc_thread, NULL, processing_thread, &args);
-		r = rtlsdr_read_async(dev, rtlsdr_callback, NULL, 0, 65536);
+		r = rtlsdr_read_async(dev, rtlsdr_callback, NULL, 0, 8192);
 		pthread_mutex_lock(&buf_mutex);
 		buf_ready_flag = 1;
 		pthread_cond_signal(&buf_ready);
