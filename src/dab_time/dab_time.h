@@ -48,6 +48,7 @@ struct ofdm_state {
 	cfloat  fft_out[DAB_T_U];
 	cfloat  prev_carriers[DAB_T_U];  /* Full FFT phase reference */
 	int     symbol_count;
+	float   freq_offset;             /* Fine frequency offset in Hz */
 };
 
 /* FIC decoder state */
@@ -67,6 +68,7 @@ struct dab_time {
 
 /* Function prototypes */
 void ofdm_init(struct ofdm_state *s);
+void ofdm_estimate_freq(struct ofdm_state *s, cfloat *symbol_time);
 int  ofdm_find_null(cfloat *samples, int len);
 void ofdm_fft(cfloat *in, cfloat *out, int n, int inverse);
 void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol, uint8_t *soft_bits);

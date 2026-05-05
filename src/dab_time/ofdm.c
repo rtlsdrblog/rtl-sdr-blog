@@ -120,6 +120,18 @@ void ofdm_init(struct ofdm_state *s)
 	init_freq_interleave();
 }
 
+/* ─── Fine Frequency Offset Estimation ───────────────────────────────
+ * Uses cyclic prefix correlation of a symbol to estimate freq offset */
+
+void ofdm_estimate_freq(struct ofdm_state *s, cfloat *symbol_time)
+{
+	cfloat corr = 0;
+	int i;
+	for (i = 0; i < DAB_T_G; i++)
+		corr += symbol_time[i] * conjf(symbol_time[i + DAB_T_U]);
+	s->freq_offset = -cargf(corr) / (2.0f * M_PI * DAB_T_U) * DAB_SAMPLE_RATE;
+}
+
 /* ─── Null Symbol Detection ──────────────────────────────────────────
  * The null symbol has significantly lower power than data symbols. */
 
@@ -185,9 +197,16 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 	int16_t index;
 	cfloat r1;
 	float ab1;
+	cfloat corrected[DAB_T_U];
+
+	/* Apply fine frequency correction before FFT */
+	for (i = 0; i < DAB_T_U; i++) {
+		float phase = -2.0f * M_PI * s->freq_offset * (float)(i + DAB_T_G) / (float)DAB_SAMPLE_RATE;
+		corrected[i] = symbol_time[DAB_T_G + i] * (cosf(phase) + I * sinf(phase));
+	}
 
 	/* FFT */
-	ofdm_fft(symbol_time + DAB_T_G, s->fft_out, DAB_T_U, 0);
+	ofdm_fft(corrected, s->fft_out, DAB_T_U, 0);
 
 	if (soft_bits) {
 		/* Iterate carriers in dabtools order but with UN-shifted FFT:

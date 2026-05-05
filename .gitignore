@@ -53,3 +53,7 @@ CMakeCache.txt
 */CMakeFiles
 CMakeFiles
 *.cmake
+doc/dab.zip
+doc/Dab+.mp3
+test_fic_offline
+.kiro/

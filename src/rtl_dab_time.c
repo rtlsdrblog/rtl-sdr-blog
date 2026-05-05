@@ -342,6 +342,9 @@ static void *processing_thread(void *arg)
 			pos = best;
 		}
 
+		/* Estimate fine frequency offset from PRS cyclic prefix */
+		ofdm_estimate_freq(&ofdm, &frame_buf[pos]);
+
 		/* PRS - store as phase reference */
 		ofdm_demod_symbol(&ofdm, &frame_buf[pos], NULL);
 		pos += DAB_T_S;

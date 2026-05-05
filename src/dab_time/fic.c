@@ -139,6 +139,7 @@ static int fic_decode_block(const uint8_t *ficblock, uint8_t *fib_data)
 
 	/* Viterbi decode: 3096 soft bits → 768 data bits */
 	viterbi_decode(viterbi_input, local, decoded_bits, 768);
+	{int zz; fprintf(stderr,"[depunc first 8: "); for(zz=0;zz<8;zz++) fprintf(stderr,"%d ",viterbi_input[zz]); fprintf(stderr,"]\n");}
 
 	/* Debug: show first 16 decoded bits as a hex byte pair */
 	{
