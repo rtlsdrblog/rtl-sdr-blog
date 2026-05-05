@@ -131,15 +131,6 @@ static void apply_time(struct dab_time *t, int set_only)
 	}
 }
 
-/* ─── Signal handler ────────────────────────────────────────────────── */
-
-static void sighandler(int signum)
-{
-	(void)signum;
-	do_exit = 1;
-	rtlsdr_cancel_async(dev);
-}
-
 /* ─── Receive buffer ────────────────────────────────────────────────── */
 
 static cfloat sample_buf[BUF_LEN * 2];
@@ -147,6 +138,41 @@ static int sample_buf_fill = 0;
 static pthread_mutex_t buf_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t buf_ready = PTHREAD_COND_INITIALIZER;
 static int buf_ready_flag = 0;
+
+/* ─── Signal handler ────────────────────────────────────────────────── */
+
+static void sighandler(int signum)
+{
+	(void)signum;
+	do_exit = 1;
+	rtlsdr_cancel_async(dev);
+	pthread_cond_signal(&buf_ready);
+}
+
+static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
+{
+	uint32_t i;
+	(void)ctx;
+	if (do_exit) return;
+
+	pthread_mutex_lock(&buf_mutex);
+	for (i = 0; i < len && sample_buf_fill < BUF_LEN; i += 2) {
+		sample_buf[sample_buf_fill++] =
+			((float)buf[i] - 127.5f) + I * ((float)buf[i+1] - 127.5f);
+	}
+	if (sample_buf_fill >= BUF_LEN) {
+		buf_ready_flag = 1;
+		pthread_cond_signal(&buf_ready);
+	}
+	pthread_mutex_unlock(&buf_mutex);
+}
+
+static void *dongle_thread_fn(void *arg)
+{
+	rtlsdr_dev_t *d = (rtlsdr_dev_t *)arg;
+	rtlsdr_read_async(d, rtlsdr_callback, NULL, 0, 16384);
+	return NULL;
+}
 
 /* ─── DAB Signal Detection ──────────────────────────────────────────
  * Checks if a buffer contains a DAB signal by looking for the null symbol.
@@ -164,19 +190,14 @@ static int detect_dab_signal(cfloat *buf, int len)
 static int scan_channels(int gain, int ppm, int enable_biastee, int start_ch)
 {
 	int ch, found = -1;
-	int n_read;
-	unsigned char *scan_buf;
 	cfloat *scan_cfloat;
 	int scan_samples = (DAB_SAMPLE_RATE * SCAN_DWELL_MS) / 1000;
-	int scan_bytes = scan_samples * 2;  /* I + Q bytes */
-	int i, attempt;
+	int i;
+	pthread_t dongle_thr;
 
-	scan_buf = (unsigned char *)malloc(scan_bytes);
 	scan_cfloat = (cfloat *)malloc(scan_samples * sizeof(cfloat));
-	if (!scan_buf || !scan_cfloat) {
+	if (!scan_cfloat) {
 		fprintf(stderr, "Error: scan buffer allocation failed\n");
-		free(scan_buf);
-		free(scan_cfloat);
 		return -1;
 	}
 
@@ -190,37 +211,36 @@ static int scan_channels(int gain, int ppm, int enable_biastee, int start_ch)
 		rtlsdr_set_center_freq(dev, dab_channels[ch].freq_hz);
 		rtlsdr_reset_buffer(dev);
 
-		/* Wait for AGC/PLL to settle after retune */
-		usleep(SCAN_SETTLE_MS * 1000);
+		/* Collect samples using async read in a thread */
+		sample_buf_fill = 0;
+		buf_ready_flag = 0;
 
-		/* Discard first read to flush stale samples */
-		rtlsdr_read_sync(dev, scan_buf, scan_bytes, &n_read);
+		pthread_create(&dongle_thr, NULL, dongle_thread_fn, dev);
 
-		for (attempt = 0; attempt < SCAN_ATTEMPTS; attempt++) {
-			if (rtlsdr_read_sync(dev, scan_buf, scan_bytes, &n_read) < 0) {
-				fprintf(stderr, "read error\n");
-				break;
-			}
+		/* Wait for buffer to fill */
+		pthread_mutex_lock(&buf_mutex);
+		while (!buf_ready_flag && !do_exit)
+			pthread_cond_wait(&buf_ready, &buf_mutex);
+		memcpy(scan_cfloat, sample_buf, BUF_LEN * sizeof(cfloat));
+		sample_buf_fill = 0;
+		buf_ready_flag = 0;
+		pthread_mutex_unlock(&buf_mutex);
 
-			/* Convert to complex float */
-			for (i = 0; i < (int)n_read / 2 && i < scan_samples; i++) {
-				scan_cfloat[i] = ((float)scan_buf[i*2] - 127.5f)
-				               + I * ((float)scan_buf[i*2+1] - 127.5f);
-			}
+		rtlsdr_cancel_async(dev);
+		pthread_join(dongle_thr, NULL);
 
-			/* Check for null symbol (DAB signal indicator) */
-			if (detect_dab_signal(scan_cfloat, i)) {
-				fprintf(stderr, "DAB FOUND!\n");
-				found = ch;
-				break;
-			}
+		if (do_exit) break;
+
+		/* Check for null symbol (DAB signal indicator) */
+		if (detect_dab_signal(scan_cfloat, BUF_LEN)) {
+			fprintf(stderr, "DAB FOUND!\n");
+			found = ch;
+			break;
+		} else {
+			fprintf(stderr, "no signal\n");
 		}
-
-		if (found >= 0) break;
-		fprintf(stderr, "no signal\n");
 	}
 
-	free(scan_buf);
 	free(scan_cfloat);
 	return found;
 }
@@ -477,40 +497,16 @@ int main(int argc, char **argv)
 		buf_ready_flag = 0;
 
 		pthread_create(&proc_thread, NULL, processing_thread, &args);
-
-		/* Use synchronous reads in a loop (async doesn't work reliably
-		 * after sync reads during scan, especially on WSL/USB passthrough) */
 		{
-			int n_read;
-			unsigned char *read_buf;
-			int read_len = 16384;
-			uint32_t idx;
+			pthread_t dongle_thr;
+			pthread_create(&dongle_thr, NULL, dongle_thread_fn, dev);
 
-			read_buf = (unsigned char *)malloc(read_len);
-			while (!do_exit && !args.rescan_needed) {
-				if (rtlsdr_read_sync(dev, read_buf, read_len, &n_read) < 0) {
-					fprintf(stderr, "Sync read error\n");
-					break;
-				}
-				pthread_mutex_lock(&buf_mutex);
-				for (idx = 0; idx < (uint32_t)n_read && sample_buf_fill < BUF_LEN * 2; idx += 2) {
-					sample_buf[sample_buf_fill++] =
-						((float)read_buf[idx] - 127.5f) + I * ((float)read_buf[idx+1] - 127.5f);
-				}
-				if (sample_buf_fill >= BUF_LEN) {
-					buf_ready_flag = 1;
-					pthread_cond_signal(&buf_ready);
-				}
-				pthread_mutex_unlock(&buf_mutex);
-			}
-			free(read_buf);
+			/* Wait for processing to finish (signal loss or exit) */
+			pthread_join(proc_thread, NULL);
+
+			rtlsdr_cancel_async(dev);
+			pthread_join(dongle_thr, NULL);
 		}
-		/* Wake up processing thread so it can exit */
-		pthread_mutex_lock(&buf_mutex);
-		buf_ready_flag = 1;
-		pthread_cond_signal(&buf_ready);
-		pthread_mutex_unlock(&buf_mutex);
-		pthread_join(proc_thread, NULL);
 
 		if (!args.rescan_needed || do_exit || manual_freq)
 			break;
