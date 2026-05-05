@@ -148,31 +148,6 @@ static pthread_mutex_t buf_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t buf_ready = PTHREAD_COND_INITIALIZER;
 static int buf_ready_flag = 0;
 
-static int cb_count = 0;
-
-static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
-{
-	uint32_t i;
-	(void)ctx;
-	if (do_exit) return;
-
-	if (cb_count < 3) {
-		fprintf(stderr, "[cb %d len=%u fill=%d]\n", cb_count, len, sample_buf_fill);
-		cb_count++;
-	}
-
-	pthread_mutex_lock(&buf_mutex);
-	for (i = 0; i < len && sample_buf_fill < BUF_LEN * 2; i += 2) {
-		sample_buf[sample_buf_fill++] =
-			((float)buf[i] - 127.5f) + I * ((float)buf[i+1] - 127.5f);
-	}
-	if (sample_buf_fill >= BUF_LEN) {
-		buf_ready_flag = 1;
-		pthread_cond_signal(&buf_ready);
-	}
-	pthread_mutex_unlock(&buf_mutex);
-}
-
 /* ─── DAB Signal Detection ──────────────────────────────────────────
  * Checks if a buffer contains a DAB signal by looking for the null symbol.
  * Returns 1 if DAB detected, 0 otherwise. */
@@ -492,19 +467,6 @@ int main(int argc, char **argv)
 		args.active_block = block_name;
 		args.rescan_needed = 0;
 
-		/* Close and reopen device to ensure clean state for async mode
-		 * (sync reads during scan leave device in incompatible state) */
-		rtlsdr_close(dev);
-		r = rtlsdr_open(&dev, (uint32_t)dev_index);
-		if (r < 0) {
-			fprintf(stderr, "Failed to reopen device\n");
-			exit(1);
-		}
-		if (gain == -100) verbose_auto_gain(dev);
-		else verbose_gain_set(dev, gain);
-		verbose_ppm_set(dev, ppm);
-		rtlsdr_set_bias_tee(dev, enable_biastee);
-		rtlsdr_set_sample_rate(dev, DAB_SAMPLE_RATE);
 		verbose_set_frequency(dev, freq);
 		verbose_reset_buffer(dev);
 
@@ -514,11 +476,36 @@ int main(int argc, char **argv)
 		sample_buf_fill = 0;
 		buf_ready_flag = 0;
 
-		cb_count = 0;
 		pthread_create(&proc_thread, NULL, processing_thread, &args);
-		fprintf(stderr, "[calling read_async dev=%p]\n", (void*)dev);
-		r = rtlsdr_read_async(dev, rtlsdr_callback, NULL, 0, 16384);
-		fprintf(stderr, "[read_async returned %d]\n", r);
+
+		/* Use synchronous reads in a loop (async doesn't work reliably
+		 * after sync reads during scan, especially on WSL/USB passthrough) */
+		{
+			int n_read;
+			unsigned char *read_buf;
+			int read_len = 16384;
+			uint32_t idx;
+
+			read_buf = (unsigned char *)malloc(read_len);
+			while (!do_exit && !args.rescan_needed) {
+				if (rtlsdr_read_sync(dev, read_buf, read_len, &n_read) < 0) {
+					fprintf(stderr, "Sync read error\n");
+					break;
+				}
+				pthread_mutex_lock(&buf_mutex);
+				for (idx = 0; idx < (uint32_t)n_read && sample_buf_fill < BUF_LEN * 2; idx += 2) {
+					sample_buf[sample_buf_fill++] =
+						((float)read_buf[idx] - 127.5f) + I * ((float)read_buf[idx+1] - 127.5f);
+				}
+				if (sample_buf_fill >= BUF_LEN) {
+					buf_ready_flag = 1;
+					pthread_cond_signal(&buf_ready);
+				}
+				pthread_mutex_unlock(&buf_mutex);
+			}
+			free(read_buf);
+		}
+		/* Wake up processing thread so it can exit */
 		pthread_mutex_lock(&buf_mutex);
 		buf_ready_flag = 1;
 		pthread_cond_signal(&buf_ready);
