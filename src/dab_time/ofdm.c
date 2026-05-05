@@ -168,6 +168,39 @@ static double estimate_fine_freq(cfloat *symbol_with_cp)
 	return cargf(corr) / (2.0 * M_PI * DAB_T_U) * DAB_SAMPLE_RATE;
 }
 
+/* ─── Frequency Interleaving Table (Mode I, 1536 carriers) ──────────
+ * EN 300 401 §14.6: π(i) = (13 × π(i-1) + 511) mod 2048
+ * Only indices < 1536 are used (skip those ≥ 1536).
+ * freq_deinterleave[i] = logical position of carrier i in the FFT output */
+
+static int freq_deinterleave[DAB_K];
+static int freq_interleave_init = 0;
+
+static void init_freq_interleave(void)
+{
+	int i, k, idx;
+	int perm[2048];
+
+	if (freq_interleave_init) return;
+
+	/* Generate permutation: π(0)=0, π(i)=(13*π(i-1)+511) mod 2048 */
+	perm[0] = 0;
+	for (i = 1; i < 2048; i++)
+		perm[i] = (13 * perm[i - 1] + 511) % 2048;
+
+	/* Map: only keep indices that fall in carrier range [0..1535]
+	 * The permutation maps logical index → physical carrier position */
+	idx = 0;
+	for (i = 0; i < 2048; i++) {
+		k = perm[i] - 256;  /* Offset: carriers 0..1535 map to perm values 256..1791 */
+		if (k >= 0 && k < DAB_K) {
+			freq_deinterleave[k] = idx;
+			idx++;
+		}
+	}
+	freq_interleave_init = 1;
+}
+
 /* ─── DQPSK Demodulation ────────────────────────────────────────────
  * DAB uses Differential QPSK: data is encoded in the phase difference
  * between the same carrier in consecutive symbols. */
@@ -177,7 +210,8 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 	int i, k;
 	cfloat carriers[DAB_K];
 	cfloat diff;
-	float phase;
+
+	init_freq_interleave();
 
 	/* Remove cyclic prefix and FFT */
 	ofdm_fft(symbol_time + DAB_T_G, s->fft_out, DAB_T_U, 0);
@@ -191,16 +225,14 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 	}
 
 	/* DQPSK: compute phase difference with previous symbol */
-	if (s->symbol_count > 0) {
+	if (s->symbol_count > 0 && soft_bits) {
 		for (i = 0; i < DAB_K; i++) {
 			float rotated_re, rotated_im;
 			int sb0, sb1;
+			int logical_pos;
 
 			diff = carriers[i] * conjf(s->prev_carriers[i]);
-			phase = cargf(diff);
 
-			/* Map DQPSK phase to 2 soft bits
-			 * Phases: pi/4, 3pi/4, -3pi/4, -pi/4 → 00, 01, 11, 10 */
 			/* Rotate by -pi/4 to align constellation to axes */
 			rotated_re = crealf(diff) * 0.7071f + cimagf(diff) * 0.7071f;
 			rotated_im = -crealf(diff) * 0.7071f + cimagf(diff) * 0.7071f;
@@ -213,8 +245,10 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 			if (sb1 < 0) sb1 = 0;
 			if (sb1 > 255) sb1 = 255;
 
-			soft_bits[i * 2]     = (uint8_t)sb0;
-			soft_bits[i * 2 + 1] = (uint8_t)sb1;
+			/* Frequency de-interleave: place bits at logical position */
+			logical_pos = freq_deinterleave[i];
+			soft_bits[logical_pos * 2]     = (uint8_t)sb0;
+			soft_bits[logical_pos * 2 + 1] = (uint8_t)sb1;
 		}
 	}
 
