@@ -314,32 +314,35 @@ static void *processing_thread(void *arg)
 			fprintf(stderr, "OFDM sync acquired (null at sample %d)\n", null_pos);
 		frames_without_sync = 0;
 
-		pos = null_pos + DAB_T_NULL;
-		if (pos + (DAB_NUM_FIC_SYMBOLS + 1) * DAB_T_S > BUF_LEN) {
-			fprintf(stderr, "B");
-			continue;
-		}
-
-		/* Fine timing: correlate cyclic prefix to find exact PRS start */
+		/* Find exact PRS start using cyclic prefix correlation.
+		 * The null detection can be off by up to ±T_NULL/2 samples,
+		 * so search a wide range around null_pos + T_NULL. */
 		{
-			int search = 100;  /* ±100 samples around estimate */
-			int s_start = pos - search;
-			int s_end = pos + search;
-			int best = pos;
+			int search_center = null_pos + DAB_T_NULL;
+			int search_range = DAB_T_NULL;  /* Search ±T_NULL samples */
+			int s_start = search_center - search_range;
+			int s_end = search_center + search_range;
+			int best = search_center;
 			float best_corr = 0.0f;
 			int sp;
+
 			if (s_start < 0) s_start = 0;
 			if (s_end + DAB_T_S > BUF_LEN) s_end = BUF_LEN - DAB_T_S;
-			for (sp = s_start; sp <= s_end; sp += 2) {
+
+			for (sp = s_start; sp < s_end; sp += 4) {
 				cfloat corr = 0;
 				int ci;
-				for (ci = 0; ci < DAB_T_G; ci += 8) {
+				for (ci = 0; ci < DAB_T_G; ci += 8)
 					corr += frame_buf[sp + ci] * conjf(frame_buf[sp + ci + DAB_T_U]);
-				}
 				float mag = crealf(corr)*crealf(corr) + cimagf(corr)*cimagf(corr);
 				if (mag > best_corr) { best_corr = mag; best = sp; }
 			}
 			pos = best;
+		}
+
+		if (pos + (DAB_NUM_FIC_SYMBOLS + 1) * DAB_T_S > BUF_LEN) {
+			fprintf(stderr, "B");
+			continue;
 		}
 
 		/* Estimate fine frequency offset from PRS cyclic prefix */
