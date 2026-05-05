@@ -142,10 +142,21 @@ static int fic_decode_block(const uint8_t *ficblock, uint8_t *fib_data)
 	/* Debug: show first 16 decoded bits as a hex byte pair */
 	{
 		static int dbg_count = 0;
-		if (dbg_count < 4) {
+		if (dbg_count < 2) {
 			int d;
 			uint8_t byte;
-			fprintf(stderr, "\n[FIC] depunc=%d vit_in: ", local);
+			/* Show soft bit distribution */
+			int hist[4] = {0,0,0,0};  /* <32, 32-127, 128-223, >223 */
+			for (d = 0; d < 2304; d++) {
+				uint8_t v = viterbi_input[d];
+				if (v < 32) hist[0]++;
+				else if (v < 128) hist[1]++;
+				else if (v < 224) hist[2]++;
+				else hist[3]++;
+			}
+			fprintf(stderr, "\n[FIC] soft dist: <32:%d 32-127:%d 128-223:%d >223:%d\n",
+				hist[0], hist[1], hist[2], hist[3]);
+			fprintf(stderr, "[FIC] depunc=%d vit_out: ", local);
 			for (d = 0; d < 8; d++) {
 				byte = 0;
 				int b2;
