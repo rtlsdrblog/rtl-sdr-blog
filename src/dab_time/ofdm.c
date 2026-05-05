@@ -233,26 +233,23 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 
 	/* DQPSK: compute phase difference with previous symbol */
 	if (s->symbol_count > 0 && soft_bits) {
+		uint8_t raw_bits[DAB_K * 2];
+
+		/* First: compute soft bits in physical carrier order */
 		for (i = 0; i < DAB_K; i++) {
 			int sb0, sb1;
-			int phys;
 			float re, im, mag;
 
-			/* Frequency de-interleave: logical bit i comes from physical carrier */
-			phys = freq_deinterleave[i];
-			diff = carriers[phys] * conjf(s->prev_carriers[phys]);
+			diff = carriers[i] * conjf(s->prev_carriers[i]);
 			re = crealf(diff);
 			im = cimagf(diff);
 
-			/* Normalize by magnitude for consistent soft bit levels */
 			mag = sqrtf(re * re + im * im);
 			if (mag > 0.0f) {
 				re /= mag;
 				im /= mag;
 			}
 
-			/* DAB DQPSK soft bits: map I and Q to soft decisions
-			 * Convention: 0 = confident "1", 255 = confident "0" */
 			sb0 = (int)(128.0f - re * 127.0f);
 			sb1 = (int)(128.0f - im * 127.0f);
 			if (sb0 < 0) sb0 = 0;
@@ -260,8 +257,16 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 			if (sb1 < 0) sb1 = 0;
 			if (sb1 > 255) sb1 = 255;
 
-			soft_bits[i * 2]     = (uint8_t)sb0;
-			soft_bits[i * 2 + 1] = (uint8_t)sb1;
+			raw_bits[i * 2]     = (uint8_t)sb0;
+			raw_bits[i * 2 + 1] = (uint8_t)sb1;
+		}
+
+		/* Then: frequency de-interleave
+		 * freq_deinterleave[logical] = physical carrier index */
+		for (i = 0; i < DAB_K; i++) {
+			int phys = freq_deinterleave[i];
+			soft_bits[i * 2]     = raw_bits[phys * 2];
+			soft_bits[i * 2 + 1] = raw_bits[phys * 2 + 1];
 		}
 	}
 
