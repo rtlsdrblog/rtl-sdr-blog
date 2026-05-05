@@ -16,7 +16,7 @@
 #define NUM_STATES VITERBI_STATES
 #define RATE       4
 
-/* Generator polynomials for DAB (octal notation) */
+/* Generator polynomials for DAB (octal notation, standard form) */
 static const int polys[RATE] = {0133, 0171, 0145, 0133};
 
 /* Precomputed: expected soft-bit value (0 or 255) for each state/input/poly */
@@ -37,9 +37,7 @@ static void init_tables(void)
 					if (polys[poly] & (1 << j))
 						bit ^= (reg >> j) & 1;
 				}
-				/* If encoder output bit is 1, expected soft value is 0
-				 * If encoder output bit is 0, expected soft value is 255 */
-				expected_output[state][input][poly] = bit ? 0 : 255;
+				expected_output[state][input][poly] = bit ? 255 : 0;
 			}
 		}
 	}

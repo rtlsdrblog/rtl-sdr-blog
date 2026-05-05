@@ -102,7 +102,8 @@ static int fic_decode_block(const uint8_t *ficblock, uint8_t *fib_data)
 	for (i = 0; i < 21; i++) {
 		for (k = 0; k < 128; k++) {
 			if (PI_16[k % 32]) {
-				/* Convert from signed (-127..+127) to unsigned (0..255) for Viterbi */
+				/* Convert from signed (-127..+127) to unsigned (0..255) for Viterbi
+				 * welle.io convention: -127 (strong 1) → 0, +127 (strong 0) → 254 */
 				viterbi_input[local] = (uint8_t)((int8_t)ficblock[input_counter] + 127);
 				input_counter++;
 			} else {
@@ -141,7 +142,7 @@ static int fic_decode_block(const uint8_t *ficblock, uint8_t *fib_data)
 
 	/* Debug: show first 16 decoded bits as a hex byte pair */
 	{
-		static int dbg_count = 0;
+		static int dbg_count = 0; fprintf(stderr, "null@%d pos=%d] ", 0, 0);
 		if (dbg_count < 2) {
 			int d;
 			uint8_t byte;
