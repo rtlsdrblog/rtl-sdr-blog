@@ -310,22 +310,24 @@ static void *processing_thread(void *arg)
 		pos = null_pos + DAB_T_NULL;
 
 		/* Fine timing: use cyclic prefix correlation on PRS to find
-		 * exact symbol start. Search around expected position. */
+		 * exact symbol start. Search within guard interval range. */
 		{
-			int search_start = pos - DAB_T_G;
-			int search_end = pos + DAB_T_G;
+			int search_start = pos - (DAB_T_G / 2);
+			int search_end = pos + (DAB_T_G / 2);
 			int best_offset = pos;
 			float best_corr = 0.0f;
 			int s_pos;
 
 			if (search_start < 0) search_start = 0;
-			if (search_end + DAB_T_S > BUF_LEN) search_end = BUF_LEN - DAB_T_S;
+			if (search_end + DAB_T_S > BUF_LEN)
+				search_end = BUF_LEN - DAB_T_S;
+			if (search_start >= search_end)
+				goto skip_frame;
 
-			for (s_pos = search_start; s_pos < search_end; s_pos += 1) {
-				/* Correlate guard interval with end of useful part */
+			for (s_pos = search_start; s_pos < search_end; s_pos += 2) {
 				float corr_re = 0, corr_im = 0, corr_mag;
 				int ci;
-				for (ci = 0; ci < DAB_T_G; ci += 4) {  /* Subsample for speed */
+				for (ci = 0; ci < DAB_T_G; ci += 8) {
 					cfloat a = frame_buf[s_pos + ci];
 					cfloat b = frame_buf[s_pos + ci + DAB_T_U];
 					corr_re += crealf(a) * crealf(b) + cimagf(a) * cimagf(b);
@@ -340,7 +342,10 @@ static void *processing_thread(void *arg)
 			pos = best_offset;
 		}
 
-		if (pos + (DAB_NUM_FIC_SYMBOLS + 1) * DAB_T_S > BUF_LEN) continue;
+		if (pos + (DAB_NUM_FIC_SYMBOLS + 1) * DAB_T_S > BUF_LEN) {
+skip_frame:
+			continue;
+		}
 
 		/* PRS */
 		ofdm.symbol_count = 0;
