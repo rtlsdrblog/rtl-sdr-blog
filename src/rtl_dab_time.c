@@ -493,7 +493,10 @@ int main(int argc, char **argv)
 		args.rescan_needed = 0;
 
 		verbose_set_frequency(dev, freq);
+		/* Reset device state fully before async mode */
+		rtlsdr_set_sample_rate(dev, DAB_SAMPLE_RATE);
 		verbose_reset_buffer(dev);
+		usleep(50000);
 
 		fprintf(stderr, "Receiving DAB block %s (%.3f MHz)\n", block_name, freq / 1e6);
 		fprintf(stderr, "Waiting for FIG 0/10 time data...\n\n");
