@@ -207,8 +207,8 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 			if (sb_im < -127) sb_im = -127;
 			if (sb_im > 127) sb_im = 127;
 
-			soft_bits[i]         = (uint8_t)(int8_t)sb_re;
-			soft_bits[DAB_K + i] = (uint8_t)(int8_t)sb_im;
+			soft_bits[i]         = (uint8_t)(int8_t)sb_im;
+			soft_bits[DAB_K + i] = (uint8_t)(int8_t)sb_re;
 		}
 	} else {
 		/* PRS: just store phase reference */
