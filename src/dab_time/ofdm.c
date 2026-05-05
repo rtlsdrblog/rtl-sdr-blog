@@ -169,35 +169,38 @@ static double estimate_fine_freq(cfloat *symbol_with_cp)
 }
 
 /* ─── Frequency Interleaving Table (Mode I, 1536 carriers) ──────────
- * EN 300 401 §14.6: π(i) = (13 × π(i-1) + 511) mod 2048
- * Only indices < 1536 are used (skip those ≥ 1536).
- * freq_deinterleave[i] = logical position of carrier i in the FFT output */
+ * EN 300 401 §14.6: π(i) = (13 × π(i-1) + 511) mod 2048, π(0) = 0
+ * Only values in [256..1791] map to active carriers (1536 total).
+ * freq_deinterleave[physical_carrier] = logical_bit_position */
 
 static int freq_deinterleave[DAB_K];
 static int freq_interleave_init = 0;
 
 static void init_freq_interleave(void)
 {
-	int i, k, idx;
-	int perm[2048];
+	int i, j, pi;
+	int table[2048];  /* Full permutation sequence */
+	int carrier_map[2048];  /* Which logical index each perm value gets */
 
 	if (freq_interleave_init) return;
 
-	/* Generate permutation: π(0)=0, π(i)=(13*π(i-1)+511) mod 2048 */
-	perm[0] = 0;
+	/* Generate full permutation sequence */
+	table[0] = 0;
 	for (i = 1; i < 2048; i++)
-		perm[i] = (13 * perm[i - 1] + 511) % 2048;
+		table[i] = (13 * table[i - 1] + 511) % 2048;
 
-	/* Map: only keep indices that fall in carrier range [0..1535]
-	 * The permutation maps logical index → physical carrier position */
-	idx = 0;
+	/* Build forward map: iterate through permutation sequence,
+	 * assign logical indices 0..1535 to entries in range [256..1791] */
+	j = 0;  /* logical index counter */
 	for (i = 0; i < 2048; i++) {
-		k = perm[i] - 256;  /* Offset: carriers 0..1535 map to perm values 256..1791 */
-		if (k >= 0 && k < DAB_K) {
-			freq_deinterleave[k] = idx;
-			idx++;
+		pi = table[i];
+		if (pi >= 256 && pi <= 1791) {
+			/* Physical carrier = pi - 256, logical position = j */
+			freq_deinterleave[pi - 256] = j;
+			j++;
 		}
 	}
+
 	freq_interleave_init = 1;
 }
 
@@ -227,19 +230,26 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 	/* DQPSK: compute phase difference with previous symbol */
 	if (s->symbol_count > 0 && soft_bits) {
 		for (i = 0; i < DAB_K; i++) {
-			float rotated_re, rotated_im;
 			int sb0, sb1;
 			int logical_pos;
+			float re, im, mag;
 
 			diff = carriers[i] * conjf(s->prev_carriers[i]);
+			re = crealf(diff);
+			im = cimagf(diff);
 
-			/* Rotate by -pi/4 to align constellation to axes */
-			rotated_re = crealf(diff) * 0.7071f + cimagf(diff) * 0.7071f;
-			rotated_im = -crealf(diff) * 0.7071f + cimagf(diff) * 0.7071f;
+			/* Normalize by magnitude for consistent soft bit levels */
+			mag = sqrtf(re * re + im * im);
+			if (mag > 0.0f) {
+				re /= mag;
+				im /= mag;
+			}
 
-			/* Soft decisions (quantized to 0-255, 128 = uncertain) */
-			sb0 = (int)(128.0f - rotated_re * 4.0f);
-			sb1 = (int)(128.0f - rotated_im * 4.0f);
+			/* DAB DQPSK soft bits: map I and Q to soft decisions
+			 * Convention: 0 = confident "1", 255 = confident "0"
+			 * Bit 0 from real part, Bit 1 from imaginary part */
+			sb0 = (int)(128.0f - re * 127.0f);
+			sb1 = (int)(128.0f - im * 127.0f);
 			if (sb0 < 0) sb0 = 0;
 			if (sb0 > 255) sb0 = 255;
 			if (sb1 < 0) sb1 = 0;
