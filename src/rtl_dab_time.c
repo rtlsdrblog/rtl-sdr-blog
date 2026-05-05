@@ -179,7 +179,7 @@ static int detect_dab_signal(cfloat *buf, int len)
  * Scans all DAB Band III channels, dwells on each for SCAN_DWELL_MS,
  * returns the index of the first channel with a DAB signal, or -1. */
 
-static int scan_channels(int gain, int ppm, int enable_biastee)
+static int scan_channels(int gain, int ppm, int enable_biastee, int start_ch)
 {
 	int ch, found = -1;
 	int n_read;
@@ -198,9 +198,10 @@ static int scan_channels(int gain, int ppm, int enable_biastee)
 		return -1;
 	}
 
-	fprintf(stderr, "Scanning DAB Band III (%d channels)...\n", NUM_DAB_CHANNELS);
+	fprintf(stderr, "Scanning DAB Band III (from channel %d/%d)...\n",
+		start_ch + 1, NUM_DAB_CHANNELS);
 
-	for (ch = 0; ch < NUM_DAB_CHANNELS && !do_exit; ch++) {
+	for (ch = start_ch; ch < NUM_DAB_CHANNELS && !do_exit; ch++) {
 		fprintf(stderr, "  Block %s (%6.3f MHz) ... ",
 			dab_channels[ch].name, dab_channels[ch].freq_hz / 1e6);
 
@@ -250,6 +251,7 @@ struct proc_args {
 	int times_set;
 	uint32_t active_freq;
 	const char *active_block;
+	int rescan_needed;
 };
 
 static void *processing_thread(void *arg)
@@ -293,7 +295,10 @@ static void *processing_thread(void *arg)
 			if (frames_without_sync > MAX_FRAMES) {
 				fprintf(stderr, "Lost DAB signal on block %s (%.3f MHz)\n",
 					a->active_block, a->active_freq / 1e6);
-				frames_without_sync = 0;
+				a->rescan_needed = 1;
+				rtlsdr_cancel_async(dev);
+				free(frame_buf);
+				return NULL;
 			}
 			continue;
 		}
@@ -437,9 +442,13 @@ int main(int argc, char **argv)
 	rtlsdr_set_bias_tee(dev, enable_biastee);
 	rtlsdr_set_sample_rate(dev, DAB_SAMPLE_RATE);
 
+	{
+	int ch_idx = 0;
+	int manual_freq = (freq != 0);
+
 	/* Auto-scan if no frequency specified */
-	if (!freq) {
-		int ch_idx = scan_channels(gain, ppm, enable_biastee);
+	if (!manual_freq) {
+		ch_idx = scan_channels(gain, ppm, enable_biastee, 0);
 		if (ch_idx < 0) {
 			fprintf(stderr, "\nNo DAB signal found on any channel.\n");
 			fprintf(stderr, "Check antenna connection and try with manual gain (-g 40).\n");
@@ -453,38 +462,61 @@ int main(int argc, char **argv)
 			block_name, freq / 1e6);
 		fprintf(stderr, "══════════════════════════════════════════\n\n");
 	} else {
-		/* Find block name for manual frequency */
 		int i;
 		for (i = 0; i < NUM_DAB_CHANNELS; i++) {
 			if (dab_channels[i].freq_hz == freq) {
 				block_name = dab_channels[i].name;
+				ch_idx = i;
 				break;
 			}
 		}
 		if (!block_name) block_name = "?";
 	}
 
-	args.active_freq = freq;
-	args.active_block = block_name;
+	while (!do_exit) {
+		args.active_freq = freq;
+		args.active_block = block_name;
+		args.rescan_needed = 0;
 
-	/* Tune to selected channel */
-	verbose_set_frequency(dev, freq);
-	verbose_reset_buffer(dev);
+		verbose_set_frequency(dev, freq);
+		verbose_reset_buffer(dev);
 
-	fprintf(stderr, "Receiving DAB block %s (%.3f MHz)\n", block_name, freq / 1e6);
-	fprintf(stderr, "Waiting for FIG 0/10 time data...\n\n");
+		fprintf(stderr, "Receiving DAB block %s (%.3f MHz)\n", block_name, freq / 1e6);
+		fprintf(stderr, "Waiting for FIG 0/10 time data...\n\n");
 
-	pthread_create(&proc_thread, NULL, processing_thread, &args);
+		sample_buf_fill = 0;
+		buf_ready_flag = 0;
 
-	/* Blocking async read */
-	rtlsdr_read_async(dev, rtlsdr_callback, NULL, 0, 65536);
+		pthread_create(&proc_thread, NULL, processing_thread, &args);
+		rtlsdr_read_async(dev, rtlsdr_callback, NULL, 0, 65536);
 
-	do_exit = 1;
-	pthread_mutex_lock(&buf_mutex);
-	buf_ready_flag = 1;
-	pthread_cond_signal(&buf_ready);
-	pthread_mutex_unlock(&buf_mutex);
-	pthread_join(proc_thread, NULL);
+		pthread_mutex_lock(&buf_mutex);
+		buf_ready_flag = 1;
+		pthread_cond_signal(&buf_ready);
+		pthread_mutex_unlock(&buf_mutex);
+		pthread_join(proc_thread, NULL);
+
+		if (!args.rescan_needed || do_exit || manual_freq)
+			break;
+
+		/* Rescan from next channel */
+		fprintf(stderr, "\nRescanning from next channel...\n");
+		ch_idx = scan_channels(gain, ppm, enable_biastee,
+				       (ch_idx + 1) % NUM_DAB_CHANNELS);
+		if (ch_idx < 0)
+			ch_idx = scan_channels(gain, ppm, enable_biastee, 0);
+		if (ch_idx < 0) {
+			fprintf(stderr, "\nNo DAB signal found on any channel.\n");
+			break;
+		}
+		freq = dab_channels[ch_idx].freq_hz;
+		block_name = dab_channels[ch_idx].name;
+		fprintf(stderr, "\n══════════════════════════════════════════\n");
+		fprintf(stderr, "  DAB signal found: Block %s (%.3f MHz)\n",
+			block_name, freq / 1e6);
+		fprintf(stderr, "══════════════════════════════════════════\n\n");
+	}
+	}
 
 	rtlsdr_close(dev);
 	fprintf(stderr, "\nTotal clock updates applied: %d\n", args.times_set);
