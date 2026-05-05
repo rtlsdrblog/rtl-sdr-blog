@@ -200,15 +200,15 @@ void ofdm_demod_symbol(struct ofdm_state *s, cfloat *symbol_time, uint8_t *soft_
 
 			/* Output soft bits: all reals first, then all imags
 			 * Negated per DAB standard convention */
-			int sb_re = (int)(-crealf(r1) * ab1);
-			int sb_im = (int)(-cimagf(r1) * ab1);
+			int sb_re = (int)(crealf(r1) * ab1);
+			int sb_im = (int)(cimagf(r1) * ab1);
 			if (sb_re < -127) sb_re = -127;
 			if (sb_re > 127) sb_re = 127;
 			if (sb_im < -127) sb_im = -127;
 			if (sb_im > 127) sb_im = 127;
 
-			soft_bits[i]         = (uint8_t)(int8_t)sb_im;
-			soft_bits[DAB_K + i] = (uint8_t)(int8_t)sb_re;
+			soft_bits[i]         = (uint8_t)(int8_t)sb_re;
+			soft_bits[DAB_K + i] = (uint8_t)(int8_t)sb_im;
 		}
 	} else {
 		/* PRS: just store phase reference */
