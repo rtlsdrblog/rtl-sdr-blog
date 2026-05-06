@@ -175,6 +175,72 @@ sudo dab_time_cli -1
 | "SyncOnPhase failed" | Weak signal — check antenna, try `-g 40` |
 | Offset oscillates | Normal during first 10s, should stabilize |
 
+## Chrony Refclock Mode (-S)
+
+The `-S` option writes time samples to NTP shared memory (SHM), allowing chrony
+to use DAB as a reference clock. This enables the **kernel frequency discipline
+loop**, which is critical for applications that call `ntp_adjtime()` to obtain
+crystal PPM correction (e.g., rtlsdr-ft8d transmitter).
+
+### Why This Matters
+
+Without chrony, `dab_time_cli` only sets the clock time — it does NOT populate
+the kernel's frequency correction (`ntx.freq`). Applications reading
+`ntp_adjtime()` will see 0 PPM and transmit at the wrong frequency.
+
+With chrony as intermediary:
+```
+DAB broadcast → dab_time_cli -S → SHM → chrony → kernel freq discipline
+                                                  → ntp_adjtime() returns correct PPM
+```
+
+### Quick Setup
+
+```bash
+sudo ./contrib/systemd/install-dab-chrony.sh 12C
+```
+
+### Manual Setup
+
+1. Run `dab_time_cli` with SHM output:
+   ```bash
+   sudo dab_time_cli -c 12C -S 2
+   ```
+
+2. Configure chrony (`/etc/chrony/conf.d/dab-time.conf`):
+   ```
+   refclock SHM 2 refid DAB precision 1e-3 delay 0.01 poll 1
+   makestep 1.0 3
+   rtcsync
+   ```
+
+3. Restart chrony:
+   ```bash
+   sudo systemctl restart chronyd
+   ```
+
+4. Verify:
+   ```bash
+   chronyc sources      # Should show #* DAB
+   chronyc tracking     # Shows frequency correction
+   ntptime              # Should show status TIME_OK with freq offset
+   ```
+
+### Verification for FT8 Transmitter
+
+After chrony converges (typically 30-60 seconds):
+```bash
+$ ntptime
+ntp_gettime() returns code 0 (OK)
+  time ... , maximum error ... us, estimated error ... us
+ntp_adjtime() returns code 0 (OK)
+  modes 0x0000,
+  offset 0.000 us, frequency 3.141 ppm, ...
+```
+
+The `frequency X.XXX ppm` value is what the FT8 transmitter reads via
+`ntp_adjtime()` to correct its RF output frequency.
+
 ## License
 
 GPL v2+ (same as rtl-sdr and welle.io)

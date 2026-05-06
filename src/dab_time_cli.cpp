@@ -6,6 +6,11 @@
  *
  * Supports: direct RTL-SDR device or rtl_tcp remote connection.
  * Auto-scans DAB Band III channels if no channel specified.
+ *
+ * With -S option, writes time samples to NTP shared memory (SHM unit 2)
+ * for consumption by chrony/ntpd as a refclock. This enables the kernel
+ * frequency discipline loop, which is required by applications like
+ * rtlsdr-ft8d that read ntp_adjtime() for crystal PPM correction.
  */
 
 #include <iostream>
@@ -19,11 +24,72 @@
 #include <vector>
 #include <string>
 #include <sys/timex.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 
 #include "radio-receiver.h"
 #include "rtl_sdr.h"
 #include "rtl_tcp.h"
 #include "channels.h"
+
+/*
+ * NTP Shared Memory protocol (RFC 2783 / gpsd SHM interface).
+ * chrony refclock SHM and ntpd driver 28 both use this struct at
+ * shmget key 0x4e545030 + unit.
+ */
+#define NTP_SHM_KEY 0x4e545030
+struct shmTime {
+    int mode;            /* 0 - if valid, set time immediately; 1 - use valid/count protocol */
+    volatile int count;
+    time_t clockTimeStampSec;
+    int clockTimeStampUSec;
+    time_t receiveTimeStampSec;
+    int receiveTimeStampUSec;
+    int leap;
+    int precision;       /* log2(seconds) of source precision, e.g. -10 for ms */
+    int nsamples;
+    volatile int valid;
+    unsigned clockTimeStampNSec;   /* added in mode 1 */
+    unsigned receiveTimeStampNSec; /* added in mode 1 */
+    int dummy[8];
+};
+
+static struct shmTime *shm_time = nullptr;
+
+static struct shmTime *shm_init(int unit) {
+    int shmid = shmget(NTP_SHM_KEY + unit, sizeof(struct shmTime), IPC_CREAT | 0600);
+    if (shmid < 0) {
+        perror("shmget");
+        return nullptr;
+    }
+    auto *p = (struct shmTime *)shmat(shmid, nullptr, 0);
+    if (p == (void *)-1) {
+        perror("shmat");
+        return nullptr;
+    }
+    memset(p, 0, sizeof(*p));
+    p->mode = 1;
+    p->precision = -10;  /* ~1 ms */
+    p->nsamples = 3;
+    return p;
+}
+
+static void shm_feed(struct shmTime *shm, const struct timespec &ref_ts, const struct timespec &sys_ts) {
+    if (!shm) return;
+    shm->valid = 0;
+    __sync_synchronize();
+    shm->count++;
+    shm->clockTimeStampSec = ref_ts.tv_sec;
+    shm->clockTimeStampUSec = ref_ts.tv_nsec / 1000;
+    shm->clockTimeStampNSec = ref_ts.tv_nsec;
+    shm->receiveTimeStampSec = sys_ts.tv_sec;
+    shm->receiveTimeStampUSec = sys_ts.tv_nsec / 1000;
+    shm->receiveTimeStampNSec = sys_ts.tv_nsec;
+    shm->leap = 0;
+    __sync_synchronize();
+    shm->count++;
+    shm->valid = 1;
+}
 
 static std::atomic<bool> running{true};
 static std::mutex time_mutex;
@@ -126,6 +192,9 @@ static void apply_time(const dab_date_time_t& t, const struct timespec& rx_mono,
     long offset_us = (ts_dab.tv_sec - sys_at_rx.tv_sec) * 1000000L
                    + (ts_dab.tv_nsec - sys_at_rx.tv_nsec) / 1000L;
 
+    /* Feed SHM refclock if enabled */
+    shm_feed(shm_time, ts_dab, sys_at_rx);
+
     fprintf(stderr, "DAB time: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC\n",
         t.year, t.month, t.day, t.hour, t.minutes, t.seconds, t.milliseconds);
     fprintf(stderr, "System offset: %+ld µs (processing delay: %ld µs)\n",
@@ -164,14 +233,18 @@ static void usage(const char* prog)
         "  -d host:port Use rtl_tcp instead of local RTL-SDR\n"
         "  -g gain_dB   Manual gain (default: AGC)\n"
         "  -s           Always step clock (no slewing)\n"
+        "  -S [unit]    Feed NTP shared memory for chrony/ntpd refclock (default unit: 2)\n"
         "  -1           One-shot: exit after first time update\n"
         "  -D device    RTL-SDR device index (default: 0)\n\n"
         "Examples:\n"
         "  %s -c 12C              # Local RTL-SDR, channel 12C\n"
+        "  %s -c 12C -S           # Feed chrony SHM refclock (unit 2)\n"
         "  %s -1                  # Auto-scan, set clock, exit\n"
         "  %s -d 192.168.1.5:1234 -c 12C  # Remote via rtl_tcp\n\n"
+        "Chrony refclock config for -S mode:\n"
+        "  refclock SHM 2 refid DAB precision 1e-3 delay 0.01\n\n"
         "Requires root or CAP_SYS_TIME to set the system clock.\n",
-        prog, prog, prog, prog);
+        prog, prog, prog, prog, prog);
 }
 
 int main(int argc, char** argv)
@@ -182,6 +255,8 @@ int main(int argc, char** argv)
     bool use_tcp = false;
     bool step_only = false;
     bool one_shot = false;
+    bool use_shm = false;
+    int shm_unit = 2;
     int device_idx = 0;
     float manual_gain = -1;
 
@@ -198,9 +273,23 @@ int main(int argc, char** argv)
         }
         else if (!strcmp(argv[i], "-g") && i+1 < argc) manual_gain = atof(argv[++i]);
         else if (!strcmp(argv[i], "-s")) step_only = true;
+        else if (!strcmp(argv[i], "-S")) {
+            use_shm = true;
+            if (i+1 < argc && argv[i+1][0] != '-') shm_unit = atoi(argv[++i]);
+        }
         else if (!strcmp(argv[i], "-1")) one_shot = true;
         else if (!strcmp(argv[i], "-D") && i+1 < argc) device_idx = atoi(argv[++i]);
         else { usage(argv[0]); return 1; }
+    }
+
+    if (use_shm) {
+        shm_time = shm_init(shm_unit);
+        if (!shm_time) {
+            fprintf(stderr, "Failed to initialize SHM unit %d\n", shm_unit);
+            return 1;
+        }
+        fprintf(stderr, "SHM refclock enabled on unit %d (key 0x%08x)\n",
+                shm_unit, NTP_SHM_KEY + shm_unit);
     }
 
     signal(SIGINT, sighandler);
@@ -322,6 +411,9 @@ int main(int argc, char** argv)
 
             long offset_us = (ts_dab.tv_sec - sys_at_rx.tv_sec) * 1000000L
                            + (ts_dab.tv_nsec - sys_at_rx.tv_nsec) / 1000L;
+
+            /* Feed SHM refclock on every sample */
+            shm_feed(shm_time, ts_dab, sys_at_rx);
 
             /* First large offset: step immediately */
             if (!first_step_done && labs(offset_us) > 500000) {
