@@ -49,6 +49,7 @@ struct ofdm_state {
 	cfloat  prev_carriers[DAB_T_U];  /* Full FFT phase reference */
 	int     symbol_count;
 	float   freq_offset;             /* Fine frequency offset in Hz */
+	int     sample_counter;          /* Continuous sample counter for freq correction */
 };
 
 /* FIC decoder state */

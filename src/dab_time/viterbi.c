@@ -36,7 +36,7 @@ static void init_tables(void)
 					if (polys[poly] & (1 << j))
 						bit ^= (reg >> j) & 1;
 				}
-				/* dabtools convention: bit 1 → 129, bit 0 → 127 */
+				/* Soft convention: 0 = strong "1", 255 = strong "0" */
 				expected_output[state][input][poly] = bit ? 129 : 127;
 			}
 		}
