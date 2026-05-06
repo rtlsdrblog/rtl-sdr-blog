@@ -57,7 +57,7 @@ struct shmTime {
 static struct shmTime *shm_time = nullptr;
 
 static struct shmTime *shm_init(int unit) {
-    int shmid = shmget(NTP_SHM_KEY + unit, sizeof(struct shmTime), IPC_CREAT | 0600);
+    int shmid = shmget(NTP_SHM_KEY + unit, sizeof(struct shmTime), IPC_CREAT | 0666);
     if (shmid < 0) {
         perror("shmget");
         return nullptr;
@@ -98,6 +98,13 @@ static bool time_received = false;
 static dab_date_time_t received_time;
 static struct timespec reception_time;  /* CLOCK_MONOTONIC at frame arrival */
 
+static void shm_invalidate(struct shmTime *shm) {
+    if (!shm) return;
+    shm->valid = 0;
+    shm->count = 0;
+    __sync_synchronize();
+}
+
 class TimeReceiver : public RadioControllerInterface {
 public:
     void onSNR(float) override {}
@@ -122,14 +129,23 @@ public:
     void onNewNullSymbol(std::vector<DSPCOMPLEX>&&) override {}
     void onTIIMeasurement(tii_measurement_t&&) override {}
     void onMessage(message_level_t level, const std::string& text, const std::string& text2) override {
-        if (level == message_level_t::Error)
+        if (level == message_level_t::Error) {
             std::cerr << "Error: " << text << text2 << std::endl;
+            if (text.find("unplugged") != std::string::npos ||
+                text2.find("unplugged") != std::string::npos ||
+                text.find("input not ok") != std::string::npos ||
+                text2.find("input not ok") != std::string::npos) {
+                shm_invalidate(shm_time);
+                _exit(1);
+            }
+        }
     }
 };
 
 static void sighandler(int) {
     running = false;
     time_cv.notify_all();
+    shm_invalidate(shm_time);
     _exit(0);  /* Force exit - welle.io threads don't stop cleanly */
 }
 
@@ -387,7 +403,13 @@ int main(int argc, char** argv)
             {
                 std::unique_lock<std::mutex> lock(time_mutex);
                 time_received = false;
-                time_cv.wait(lock, [] { return time_received || !running; });
+                if (!time_cv.wait_for(lock, std::chrono::seconds(10),
+                        [] { return time_received || !running; })) {
+                    /* No time sample for 10s — device likely disconnected */
+                    fprintf(stderr, "No DAB time for 10s, exiting (USB disconnected?)\n");
+                    shm_invalidate(shm_time);
+                    _exit(1);
+                }
             }
             if (!time_received || !running) continue;
 

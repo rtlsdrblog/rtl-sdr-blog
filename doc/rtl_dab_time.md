@@ -372,10 +372,78 @@ This script handles steps 4-8 automatically.
 |---------|-------|----------|
 | `#x DAB` in chronyc sources | Chrony rejects DAB as falseticker | Add `trust` to refclock line, or remove NTP servers |
 | `#?` DAB stays for >30s | Not enough samples or large offset | Run `chronyc makestep` to force step |
+| `#?` DAB with `Reach 0` forever | SHM permissions wrong (chrony runs as `_chrony`) | Rebuild with 0666 permissions, or `sudo ipcrm -M 0x4e545032` and restart |
 | Offset diverging (growing) | Old dab_time_cli adjusting clock AND chrony | Rebuild from `chrony` branch — SHM mode must not call adjtime |
-| `frequency 0.000 ppm` in ntptime | Chrony hasn't converged yet | Wait 60s; check `chronyc tracking` |
+| DAB offset constant ~1-2s | Broadcaster pipeline delay | Add `offset X.XXX` to chrony refclock line (see calibration below) |
+| `frequency 0.000 ppm` | Chrony hasn't converged yet | Wait 60s; check `chronyc tracking` |
 | "Text file busy" on install | Service still running | `sudo systemctl stop dab-time-chrony` before copying binary |
 | DAB offset stable but ~500ms | Clock was wrong at startup | `chronyc makestep` or lower `makestep` threshold |
+| Chrony holds DAB after unplug | Normal — chrony trusts last good sample | Wait 1-2 min, or `sudo systemctl restart chrony` |
+| `chronyd.service not found` | Raspberry Pi OS uses `chrony.service` | Use `sudo systemctl restart chrony` |
+
+---
+
+### Calibrating the Broadcaster Offset
+
+DAB broadcasters often have a fixed time offset (1-2 seconds) due to their
+encoding/multiplexing pipeline. This offset is constant for a given ensemble
+and must be compensated in the chrony config.
+
+**Calibration procedure:**
+
+1. Ensure the system clock is correct (NTP synced):
+   ```bash
+   sudo systemctl start chrony
+   chronyc tracking   # Verify "System time: 0.00000x seconds"
+   ```
+
+2. Run `dab_time_cli` and observe the stable offset:
+   ```bash
+   sudo dab_time_cli -c 12C -S 2 2>&1 | tail -20
+   # Look for stable offset, e.g.: offset: -1620800 µs → SHM
+   ```
+
+3. Convert to seconds and add to chrony config:
+   ```
+   # -1,620,800 µs = -1.621 s → chrony needs offset +1.621
+   refclock SHM 2 refid DAB precision 1e-3 delay 0.01 poll 1 prefer offset 1.621
+   ```
+
+4. Restart chrony and verify:
+   ```bash
+   sudo systemctl restart chrony
+   chronyc sources   # DAB offset should now be near zero
+   ```
+
+**Known broadcaster offsets:**
+- SR Stockholm (12C, Sweden): ~1.62 seconds
+
+---
+
+### USB Hotplug and NTP Fallback
+
+The fallback configuration (`chrony-dab-fallback.conf`) keeps NTP servers
+available so chrony can switch when the RTL-SDR is disconnected.
+
+**Behavior:**
+- RTL-SDR connected → `dab_time_cli` feeds SHM → chrony uses DAB (`#*`)
+- RTL-SDR removed → process exits (10s watchdog) → SHM invalidated → chrony falls back to NTP (`^*`)
+- RTL-SDR reconnected → systemd restarts service → chrony switches back to DAB
+
+**udev rule** (`contrib/99-rtlsdr-dab.rules`): Automatically starts/stops the
+service on USB plug/unplug events for faster response.
+
+Install:
+```bash
+sudo cp contrib/99-rtlsdr-dab.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+```
+
+**Note:** Chrony may hold onto the last good DAB sample for 1-2 minutes before
+switching to NTP. This is normal and harmless — the frequency correction remains
+valid during this window since crystal drift is slow (PPM changes over hours).
+
+---
 
 ### Architecture Diagram
 
@@ -385,19 +453,18 @@ This script handles steps 4-8 automatically.
 │ (Band III)  │     │  (time extract)  │     │(IPC mem)│     │ (discipline) │
 └─────────────┘     └──────────────────┘     └─────────┘     └──────┬───────┘
                                                                      │
-                                                                     ▼
-                                                              ┌──────────────┐
-                                                              │ Linux Kernel │
-                                                              │  ntx.freq    │
-                                                              │ (PPM value)  │
-                                                              └──────┬───────┘
-                                                                     │
-                                                                     ▼
-                                                              ┌──────────────┐
-                                                              │ FT8 TX (ft8) │
-                                                              │ntp_adjtime() │
-                                                              │→ correct freq│
-                                                              └──────────────┘
+                         ┌───────────────────────────────────────────┘
+                         ▼                                           │
+                  ┌──────────────┐                                   ▼
+                  │ NTP servers  │◀─── fallback when DAB unavailable
+                  └──────────────┘
+                         │
+                         ▼
+                  ┌──────────────┐     ┌──────────────┐
+                  │ Linux Kernel │     │ FT8 TX (ft8) │
+                  │  ntx.freq    │────▶│ntp_adjtime() │
+                  │ (PPM value)  │     │→ correct freq│
+                  └──────────────┘     └──────────────┘
 ```
 
 ## License
