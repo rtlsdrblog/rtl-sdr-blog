@@ -139,6 +139,63 @@ static pthread_mutex_t buf_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t buf_ready = PTHREAD_COND_INITIALIZER;
 static int buf_ready_flag = 0;
 
+/* ─── Software AGC (matching welle.io) ──────────────────────────────── */
+
+static volatile uint8_t agc_min_amplitude = 255;
+static volatile uint8_t agc_max_amplitude = 0;
+static volatile int agc_running = 0;
+static int agc_gain_index = 0;
+static int agc_gain_count = 0;
+static int *agc_gains = NULL;
+
+static void agc_init(void)
+{
+	agc_gain_count = rtlsdr_get_tuner_gains(dev, NULL);
+	if (agc_gain_count <= 0) return;
+	agc_gains = (int *)malloc(agc_gain_count * sizeof(int));
+	rtlsdr_get_tuner_gains(dev, agc_gains);
+
+	/* Start at max gain */
+	agc_gain_index = agc_gain_count - 1;
+
+	/* Force manual gain mode */
+	rtlsdr_set_tuner_gain_mode(dev, 1);
+	rtlsdr_set_tuner_gain(dev, agc_gains[agc_gain_index]);
+	fprintf(stderr, "Software AGC: %d gain steps (%.1f - %.1f dB)\n",
+		agc_gain_count, agc_gains[0] / 10.0,
+		agc_gains[agc_gain_count - 1] / 10.0);
+}
+
+static void *agc_thread_fn(void *arg)
+{
+	(void)arg;
+	while (agc_running && !do_exit) {
+		usleep(50000);  /* 50ms */
+
+		if (agc_min_amplitude == 0 || agc_max_amplitude == 255) {
+			/* ADC clipping → decrease gain */
+			if (agc_gain_index > 0) {
+				agc_gain_index--;
+				rtlsdr_set_tuner_gain(dev, agc_gains[agc_gain_index]);
+			}
+		} else {
+			/* Check if we can safely increase gain */
+			if (agc_gain_index < agc_gain_count - 1) {
+				float delta_db = (agc_gains[agc_gain_index + 1] -
+				                  agc_gains[agc_gain_index]) / 10.0f;
+				float lin_gain = powf(10.0f, delta_db / 20.0f);
+				int new_max = (int)(agc_max_amplitude * lin_gain);
+				int new_min = (int)(agc_min_amplitude / lin_gain);
+				if (new_min >= 0 && new_max <= 255) {
+					agc_gain_index++;
+					rtlsdr_set_tuner_gain(dev, agc_gains[agc_gain_index]);
+				}
+			}
+		}
+	}
+	return NULL;
+}
+
 /* ─── Signal handler ────────────────────────────────────────────────── */
 
 static void sighandler(int signum)
@@ -152,8 +209,17 @@ static void sighandler(int signum)
 static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 {
 	uint32_t i;
+	uint8_t lo = 255, hi = 0;
 	(void)ctx;
 	if (do_exit) return;
+
+	/* Track min/max for AGC */
+	for (i = 0; i < len; i++) {
+		if (buf[i] < lo) lo = buf[i];
+		if (buf[i] > hi) hi = buf[i];
+	}
+	agc_min_amplitude = lo;
+	agc_max_amplitude = hi;
 
 	pthread_mutex_lock(&buf_mutex);
 	for (i = 0; i < len && sample_buf_fill < BUF_LEN; i += 2) {
@@ -483,9 +549,16 @@ int main(int argc, char **argv)
 	sigaction(SIGTERM, &sigact, NULL);
 	sigaction(SIGPIPE, &sigact, NULL);
 
-	/* Configure device */
-	if (gain == -100) verbose_auto_gain(dev);
-	else { gain = nearest_gain(dev, gain); verbose_gain_set(dev, gain); }
+	/* Configure device - always use software AGC (like welle.io) */
+	agc_init();
+	if (gain != -100) {
+		/* Manual gain override */
+		gain = nearest_gain(dev, gain);
+		verbose_gain_set(dev, gain);
+		agc_running = 0;
+	} else {
+		agc_running = 1;
+	}
 
 	verbose_ppm_set(dev, ppm);
 	rtlsdr_set_bias_tee(dev, enable_biastee);
@@ -538,14 +611,21 @@ int main(int argc, char **argv)
 
 		pthread_create(&proc_thread, NULL, processing_thread, &args);
 		{
-			pthread_t dongle_thr;
+			pthread_t dongle_thr, agc_thr;
 			pthread_create(&dongle_thr, NULL, dongle_thread_fn, dev);
+			if (agc_running)
+				pthread_create(&agc_thr, NULL, agc_thread_fn, NULL);
 
 			/* Wait for processing to finish (signal loss or exit) */
 			pthread_join(proc_thread, NULL);
 
 			rtlsdr_cancel_async(dev);
 			pthread_join(dongle_thr, NULL);
+			if (agc_running) {
+				agc_running = 0;
+				pthread_join(agc_thr, NULL);
+				agc_running = 1;  /* Re-enable for next iteration */
+			}
 		}
 
 		if (!args.rescan_needed || do_exit || manual_freq)
