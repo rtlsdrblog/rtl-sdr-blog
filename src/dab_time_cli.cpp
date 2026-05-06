@@ -57,7 +57,7 @@ struct shmTime {
 static struct shmTime *shm_time = nullptr;
 
 static struct shmTime *shm_init(int unit) {
-    int shmid = shmget(NTP_SHM_KEY + unit, sizeof(struct shmTime), IPC_CREAT | 0600);
+    int shmid = shmget(NTP_SHM_KEY + unit, sizeof(struct shmTime), IPC_CREAT | 0666);
     if (shmid < 0) {
         perror("shmget");
         return nullptr;
