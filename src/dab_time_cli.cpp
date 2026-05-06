@@ -348,9 +348,9 @@ int main(int argc, char** argv)
             offset_idx = (offset_idx + 1) % AVG_WINDOW;
             if (offset_count < AVG_WINDOW) offset_count++;
 
-            /* Apply correction only when we have enough samples */
+            /* Apply correction only when window is full, then reset */
             if (offset_count >= AVG_WINDOW) {
-                /* Compute median (sort and take middle) */
+                /* Compute median */
                 long sorted[AVG_WINDOW];
                 memcpy(sorted, offset_history, sizeof(sorted));
                 int a, b;
@@ -359,23 +359,23 @@ int main(int argc, char** argv)
                         if (sorted[a] > sorted[b]) { long t = sorted[a]; sorted[a] = sorted[b]; sorted[b] = t; }
                 long median_offset = sorted[AVG_WINDOW / 2];
 
-                fprintf(stderr, "DAB time: %02d:%02d:%02d.%03d | offset: %+ld µs | median(%d): %+ld µs",
+                fprintf(stderr, "DAB time: %02d:%02d:%02d.%03d | median offset: %+ld µs",
                     received_time.hour, received_time.minutes, received_time.seconds,
-                    received_time.milliseconds, offset_us, AVG_WINDOW, median_offset);
+                    received_time.milliseconds, median_offset);
 
                 if (labs(median_offset) > 100) {
                     struct timeval delta;
                     delta.tv_sec = 0;
                     delta.tv_usec = median_offset;
                     adjtime(&delta, NULL);
-                    fprintf(stderr, " → slew %+ld µs\n", median_offset);
+                    fprintf(stderr, " → slew\n");
                 } else {
                     fprintf(stderr, " → ok\n");
                 }
-            } else {
-                fprintf(stderr, "DAB time: %02d:%02d:%02d.%03d | offset: %+ld µs | collecting %d/%d\n",
-                    received_time.hour, received_time.minutes, received_time.seconds,
-                    received_time.milliseconds, offset_us, offset_count, AVG_WINDOW);
+
+                /* Reset window — wait for slew to complete before next measurement */
+                offset_count = 0;
+                offset_idx = 0;
             }
         }
     }
