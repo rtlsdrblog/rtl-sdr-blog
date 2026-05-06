@@ -23,8 +23,13 @@ if systemctl is-active --quiet systemd-timesyncd 2>/dev/null; then
     echo "Disabling systemd-timesyncd (replaced by chrony)..."
     systemctl stop systemd-timesyncd
     systemctl disable systemd-timesyncd
-    timedatectl set-ntp false
 fi
+timedatectl set-ntp false 2>/dev/null || true
+
+# Comment out NTP pool/server lines to prevent chrony from rejecting DAB
+echo "Disabling NTP servers in chrony.conf (DAB will be sole source)..."
+sed -i 's/^pool /#pool /' /etc/chrony/chrony.conf
+sed -i 's/^server /#server /' /etc/chrony/chrony.conf
 
 # Install chrony config
 echo "Installing chrony DAB refclock config..."
@@ -41,17 +46,31 @@ sed "s/-c 12C/-c $CHANNEL/" \
 systemctl stop dab-time 2>/dev/null || true
 systemctl disable dab-time 2>/dev/null || true
 
-# Enable and start
+# Reload and enable
 systemctl daemon-reload
 systemctl enable dab-time-chrony
+
+# Start dab_time_cli first, let it lock, then start chrony
+echo "Starting dab-time-chrony..."
 systemctl restart dab-time-chrony
+echo "Waiting for DAB lock (5 seconds)..."
+sleep 5
+
+echo "Restarting chrony..."
 systemctl restart chronyd
+
+# Force step if clock is far off
+sleep 3
+chronyc makestep 2>/dev/null || true
 
 echo ""
 echo "=== Done ==="
 echo "DAB time → SHM unit 2 → chrony → kernel frequency discipline"
 echo ""
 echo "Verify with:"
-echo "  chronyc sources    # Should show DAB refclock"
+echo "  chronyc sources    # Should show #* DAB"
 echo "  chronyc tracking   # Should show frequency correction"
 echo "  ntptime            # Should show TIME_OK and freq offset"
+echo ""
+echo "If chronyc shows '#? DAB', wait 30 seconds for convergence."
+echo "If offset is large, run: chronyc makestep"

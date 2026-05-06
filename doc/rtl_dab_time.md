@@ -194,52 +194,211 @@ DAB broadcast → dab_time_cli -S → SHM → chrony → kernel freq discipline
                                                   → ntp_adjtime() returns correct PPM
 ```
 
-### Quick Setup
+### Important: In SHM mode (`-S`), `dab_time_cli` does NOT adjust the clock
+itself. All clock discipline is handled exclusively by chrony. This prevents
+the two from fighting each other and causing clock divergence.
+
+---
+
+### Installation on Raspberry Pi (Step by Step)
+
+#### 1. Install dependencies
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake g++ libfftw3-dev libusb-1.0-0-dev chrony git
+```
+
+#### 2. Blacklist DVB kernel module
+
+```bash
+echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/blacklist-dvb_usb_rtl28xxu.conf
+sudo modprobe -r dvb_usb_rtl28xxu 2>/dev/null || true
+```
+
+#### 3. Build and install rtl-sdr-blog with dab_time_cli
+
+```bash
+git clone -b chrony https://github.com/Claudio-Sjo/rtl-sdr-blog
+cd rtl-sdr-blog
+git submodule update --init --recursive
+
+# Apply welle.io patch
+cd lib/welle.io
+git apply ../../patches/welle-io-milliseconds.patch
+cd ../..
+
+# Build
+mkdir build && cd build
+cmake -DCMAKE_INSTALL_PREFIX:PATH=/usr -DDETACH_KERNEL_DRIVER=ON \
+      -DBUILD_DAB_TIME=ON -Wno-dev ../
+make -j$(nproc)
+sudo make install
+sudo ldconfig
+cd ..
+```
+
+#### 4. Disable conflicting time services
+
+```bash
+# Disable systemd-timesyncd (conflicts with chrony)
+sudo systemctl stop systemd-timesyncd
+sudo systemctl disable systemd-timesyncd
+sudo timedatectl set-ntp false
+
+# Disable any existing dab-time service (non-chrony version)
+sudo systemctl stop dab-time 2>/dev/null || true
+sudo systemctl disable dab-time 2>/dev/null || true
+```
+
+#### 5. Remove NTP servers from chrony config
+
+**Critical**: If chrony has NTP pool/server entries, it will prefer them over
+the DAB refclock and may reject DAB as a "falseticker". For offline/DAB-only
+operation, comment out all NTP sources:
+
+```bash
+sudo sed -i 's/^pool /#pool /' /etc/chrony/chrony.conf
+sudo sed -i 's/^server /#server /' /etc/chrony/chrony.conf
+```
+
+If you want to keep NTP servers as a backup (system has network sometimes),
+add `prefer trust` to the DAB refclock line instead (see step 6).
+
+#### 6. Install chrony DAB refclock configuration
+
+```bash
+sudo mkdir -p /etc/chrony/conf.d
+sudo tee /etc/chrony/conf.d/dab-time.conf << 'EOF'
+# DAB time via NTP shared memory (SHM unit 2)
+# dab_time_cli must be running with -S 2
+refclock SHM 2 refid DAB precision 1e-3 delay 0.01 poll 1 prefer trust
+
+# Step clock if offset > 0.5s (first 3 updates)
+makestep 0.5 3
+
+# Enable kernel frequency discipline (required for ntp_adjtime consumers)
+rtcsync
+EOF
+```
+
+**Note on `prefer trust`**: `prefer` makes chrony select DAB over NTP servers.
+`trust` prevents chrony from rejecting DAB as a falseticker when it disagrees
+with NTP sources. Use both when DAB is your primary time source.
+
+#### 7. Install and start the systemd service
+
+```bash
+# Install service (edit channel as needed — 12C is for SR Stockholm, Sweden)
+sudo tee /etc/systemd/system/dab-time-chrony.service << 'EOF'
+[Unit]
+Description=DAB Time SHM refclock for chrony
+After=local-fs.target
+Before=chronyd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dab_time_cli -c 12C -S 2
+Restart=on-failure
+RestartSec=10
+AmbientCapabilities=CAP_SYS_TIME
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable dab-time-chrony
+sudo systemctl start dab-time-chrony
+```
+
+#### 8. Restart chrony and verify
+
+```bash
+# Wait a few seconds for dab_time_cli to lock, then start chrony
+sleep 5
+sudo systemctl restart chronyd
+```
+
+Check DAB is feeding samples:
+```bash
+journalctl -u dab-time-chrony --no-pager -n 5
+# Should show: DAB time: HH:MM:SS.mmm | offset: +/-XXX µs → SHM
+```
+
+Check chrony is using DAB:
+```bash
+chronyc sources
+# Should show:  #* DAB  (asterisk = selected source)
+```
+
+If chrony shows `#?` (still gathering), wait 10 seconds. If offset is large
+(>500ms), force a step:
+```bash
+chronyc makestep
+```
+
+#### 9. Verify kernel frequency discipline
+
+After chrony converges (30-60 seconds):
+```bash
+chronyc tracking
+# Look for: Frequency : -X.XXX ppm slow/fast
+
+ntptime
+# Should show:
+#   ntp_adjtime() returns code 0 (OK)
+#   frequency X.XXX ppm
+```
+
+The `frequency X.XXX ppm` value is what the FT8 transmitter reads via
+`ntp_adjtime()` to correct its RF output frequency.
+
+---
+
+### Quick Setup (Automated)
 
 ```bash
 sudo ./contrib/systemd/install-dab-chrony.sh 12C
 ```
 
-### Manual Setup
+This script handles steps 4-8 automatically.
 
-1. Run `dab_time_cli` with SHM output:
-   ```bash
-   sudo dab_time_cli -c 12C -S 2
-   ```
+---
 
-2. Configure chrony (`/etc/chrony/conf.d/dab-time.conf`):
-   ```
-   refclock SHM 2 refid DAB precision 1e-3 delay 0.01 poll 1
-   makestep 1.0 3
-   rtcsync
-   ```
+### Troubleshooting Chrony Mode
 
-3. Restart chrony:
-   ```bash
-   sudo systemctl restart chronyd
-   ```
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| `#x DAB` in chronyc sources | Chrony rejects DAB as falseticker | Add `trust` to refclock line, or remove NTP servers |
+| `#?` DAB stays for >30s | Not enough samples or large offset | Run `chronyc makestep` to force step |
+| Offset diverging (growing) | Old dab_time_cli adjusting clock AND chrony | Rebuild from `chrony` branch — SHM mode must not call adjtime |
+| `frequency 0.000 ppm` in ntptime | Chrony hasn't converged yet | Wait 60s; check `chronyc tracking` |
+| "Text file busy" on install | Service still running | `sudo systemctl stop dab-time-chrony` before copying binary |
+| DAB offset stable but ~500ms | Clock was wrong at startup | `chronyc makestep` or lower `makestep` threshold |
 
-4. Verify:
-   ```bash
-   chronyc sources      # Should show #* DAB
-   chronyc tracking     # Shows frequency correction
-   ntptime              # Should show status TIME_OK with freq offset
-   ```
+### Architecture Diagram
 
-### Verification for FT8 Transmitter
-
-After chrony converges (typically 30-60 seconds):
-```bash
-$ ntptime
-ntp_gettime() returns code 0 (OK)
-  time ... , maximum error ... us, estimated error ... us
-ntp_adjtime() returns code 0 (OK)
-  modes 0x0000,
-  offset 0.000 us, frequency 3.141 ppm, ...
 ```
-
-The `frequency X.XXX ppm` value is what the FT8 transmitter reads via
-`ntp_adjtime()` to correct its RF output frequency.
+┌─────────────┐     ┌──────────────────┐     ┌─────────┐     ┌──────────────┐
+│ DAB Antenna │────▶│  dab_time_cli -S │────▶│ SHM 2   │────▶│   chronyd    │
+│ (Band III)  │     │  (time extract)  │     │(IPC mem)│     │ (discipline) │
+└─────────────┘     └──────────────────┘     └─────────┘     └──────┬───────┘
+                                                                     │
+                                                                     ▼
+                                                              ┌──────────────┐
+                                                              │ Linux Kernel │
+                                                              │  ntx.freq    │
+                                                              │ (PPM value)  │
+                                                              └──────┬───────┘
+                                                                     │
+                                                                     ▼
+                                                              ┌──────────────┐
+                                                              │ FT8 TX (ft8) │
+                                                              │ntp_adjtime() │
+                                                              │→ correct freq│
+                                                              └──────────────┘
+```
 
 ## License
 
