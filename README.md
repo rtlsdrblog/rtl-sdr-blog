@@ -26,7 +26,7 @@ For more information see: https://osmocom.org/projects/rtl-sdr/wiki
 
 ```bash
 # Build
-sudo apt install libfftw3-dev libmpg123-dev libfaad-dev libmp3lame-dev
+sudo apt install libfftw3-dev libusb-1.0-0-dev chrony
 git submodule update --init
 cd lib/welle.io && git apply ../../patches/welle-io-milliseconds.patch && cd ../..
 mkdir build && cd build
@@ -34,12 +34,45 @@ cmake -DBUILD_DAB_TIME=ON ..
 make dab_time_cli
 sudo make install
 
-# Use
+# Use (standalone — sets clock directly)
 sudo dab_time_cli -c 12C      # Continuous discipline
 sudo dab_time_cli -c 12C -1   # One-shot: set clock and exit
+
+# Use with chrony (enables kernel frequency discipline for FT8 TX)
+sudo dab_time_cli -c 12C -S 2   # Feed chrony via NTP shared memory
 ```
 
 See [doc/rtl_dab_time.md](doc/rtl_dab_time.md) for full documentation, systemd service setup, and channel list.
+
+### Chrony Integration (for rtlsdr-ft8d / FT8 transmitter)
+
+The `-S` option feeds time samples to chrony via NTP shared memory, enabling the
+kernel frequency discipline loop (`ntp_adjtime()`). This is required by the
+[rtlsdr-ft8d](https://github.com/Claudio-Sjo/rtlsdr-ft8d) transmitter for
+crystal PPM correction.
+
+```bash
+# Automated install (disables NTP servers, configures chrony, starts services)
+sudo ./contrib/systemd/install-dab-chrony.sh 12C
+
+# Verify
+chronyc sources      # Should show #* DAB
+ntptime              # Should show frequency X.XXX ppm
+```
+
+Chrony config (`/etc/chrony/conf.d/dab-time.conf`):
+```
+refclock SHM 2 refid DAB precision 1e-3 delay 0.01 poll 1 prefer trust
+makestep 0.5 3
+rtcsync
+```
+
+**Important**: Disable or remove NTP pool/server lines from `/etc/chrony/chrony.conf`
+when using DAB as the sole time source, otherwise chrony may reject DAB as a
+falseticker.
+
+See [doc/rtl_dab_time.md](doc/rtl_dab_time.md#chrony-refclock-mode--s) for
+detailed step-by-step instructions and troubleshooting.
 
 ---
 
