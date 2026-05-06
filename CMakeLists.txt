@@ -216,3 +216,7 @@ install(
 ########################################################################
 MESSAGE(STATUS "Building for version: ${VERSION} / ${LIBVER}")
 MESSAGE(STATUS "Using install prefix: ${CMAKE_INSTALL_PREFIX}")
+
+# DAB time tool (requires welle.io submodule)
+option(BUILD_DAB_TIME "Build dab_time_cli (requires fftw3f, mpg123, faad, lame)" OFF)
+include(cmake/DabTime.cmake)

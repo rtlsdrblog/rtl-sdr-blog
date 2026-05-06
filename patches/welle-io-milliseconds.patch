@@ -1,0 +1,24 @@
+diff --git a/src/backend/fib-processor.cpp b/src/backend/fib-processor.cpp
+index 3cd18724..4836d6f7 100644
+--- a/src/backend/fib-processor.cpp
++++ b/src/backend/fib-processor.cpp
+@@ -523,6 +523,7 @@ void FIBProcessor::FIG0Extension10(uint8_t *fig)
+     dateTime.minutes = getBits_6(fig, offset + 26);
+     if (fig [offset + 20] == 1) {
+         dateTime.seconds = getBits_6(fig, offset + 32);
++        dateTime.milliseconds = getBits(fig, offset + 38, 10);
+     }
+ 
+     if (timeOffsetReceived) {
+diff --git a/src/backend/radio-controller.h b/src/backend/radio-controller.h
+index 22be22dd..f184a93f 100644
+--- a/src/backend/radio-controller.h
++++ b/src/backend/radio-controller.h
+@@ -46,6 +46,7 @@ struct dab_date_time_t {
+     int hour = 0;
+     int minutes = 0;
+     int seconds = 0;
++    int milliseconds = 0;
+ 
+     // Information decoded from local time offset in FIG 0/9
+     int hourOffset = 0;
