@@ -18,15 +18,18 @@ For more information see: https://osmocom.org/projects/rtl-sdr/wiki
 4. **Offset tuning = bias tee toggle** — Use "offset tuning" button in SDR# to toggle bias tee
 5. **R828D RTL-SDR Blog V4 support** — Added
 6. **Auto direct sampling** — Automatically switches to direct sampling below 24 MHz (R820T/R860)
-7. **DAB time synchronization** — `dab_time_cli` extracts UTC time from DAB broadcasts as NTP replacement *(new)*
+7. **DAB time synchronization** — `dab_time_cli` extracts UTC time from DAB broadcasts *(new)*
+8. **Chrony refclock integration** — DAB time as chrony source with NTP fallback and USB hotplug *(new)*
 
-### DAB Time Synchronization (NTP Replacement)
+### DAB Time Synchronization
 
-`dab_time_cli` uses DAB digital radio broadcasts to synchronize the system clock with ±200 µs accuracy — no network required. Uses [welle.io](https://github.com/AlbrechtL/welle.io) as the DAB decoding backend.
+`dab_time_cli` uses DAB digital radio broadcasts to synchronize the system clock
+with ±100 µs accuracy — no network required. Uses [welle.io](https://github.com/AlbrechtL/welle.io)
+as the DAB decoding backend.
 
 ```bash
 # Build
-sudo apt install libfftw3-dev libmpg123-dev libfaad-dev libmp3lame-dev
+sudo apt install libfftw3-dev libusb-1.0-0-dev cmake g++
 git submodule update --init
 cd lib/welle.io && git apply ../../patches/welle-io-milliseconds.patch && cd ../..
 mkdir build && cd build
@@ -34,12 +37,77 @@ cmake -DBUILD_DAB_TIME=ON ..
 make dab_time_cli
 sudo make install
 
-# Use
-sudo dab_time_cli -c 12C      # Continuous discipline
-sudo dab_time_cli -c 12C -1   # One-shot: set clock and exit
+# Use (standalone — sets clock directly)
+sudo dab_time_cli -c 12C        # Continuous discipline
+sudo dab_time_cli -c 12C -1     # One-shot: set clock and exit
+
+# Use with chrony (enables kernel frequency discipline)
+sudo dab_time_cli -c 12C -S 2   # Feed chrony via NTP shared memory
 ```
 
-See [doc/rtl_dab_time.md](doc/rtl_dab_time.md) for full documentation, systemd service setup, and channel list.
+See [doc/rtl_dab_time.md](doc/rtl_dab_time.md) for full documentation.
+
+### Chrony Refclock Integration
+
+The `-S` option feeds DAB time samples to chrony via NTP shared memory (SHM),
+enabling the **kernel frequency discipline loop** (`ntp_adjtime()`). This is
+required by applications like [rtlsdr-ft8d](https://github.com/Claudio-Sjo/rtlsdr-ft8d)
+that need crystal PPM correction for accurate RF transmission.
+
+**Two operating modes:**
+
+| Mode | Config | Behavior |
+|------|--------|----------|
+| DAB only | `chrony-dab.conf` | DAB is sole time source (offline systems) |
+| DAB + NTP fallback | `chrony-dab-fallback.conf` | DAB preferred, NTP when dongle removed |
+
+**Quick install (DAB + NTP fallback with USB hotplug):**
+
+```bash
+sudo ./contrib/systemd/install-dab-chrony-fallback.sh 12C
+```
+
+**Quick install (DAB only, no network):**
+
+```bash
+sudo ./contrib/systemd/install-dab-chrony.sh 12C
+```
+
+**How it works:**
+
+```
+┌─────────────┐     ┌──────────────────┐     ┌─────────┐     ┌─────────┐
+│ DAB Antenna │────▶│ dab_time_cli -S  │────▶│ SHM     │────▶│ chrony  │
+└─────────────┘     └──────────────────┘     └─────────┘     └────┬────┘
+                                                                   │
+                              ┌─────────────────────────────────────┘
+                              ▼
+                    ┌──────────────────┐     ┌──────────────────────┐
+                    │ Kernel ntx.freq  │────▶│ FT8 TX (ntp_adjtime) │
+                    │ (PPM correction) │     │ → correct RF freq    │
+                    └──────────────────┘     └──────────────────────┘
+```
+
+**USB hotplug behavior (fallback mode):**
+- RTL-SDR plugged in → DAB time active (±100µs accuracy)
+- RTL-SDR removed → process exits, chrony falls back to NTP
+- RTL-SDR plugged back → service restarts, chrony switches back to DAB
+
+**Important notes:**
+- DAB broadcasters may have a fixed time offset (pipeline delay). Calibrate with
+  `offset` parameter in chrony config. See [doc/rtl_dab_time.md](doc/rtl_dab_time.md#chrony-refclock-mode--s).
+- When using DAB as sole source, remove NTP pool/server lines from chrony.conf
+  to prevent chrony from rejecting DAB as a falseticker.
+
+**Verify:**
+
+```bash
+chronyc sources          # #* DAB = selected
+chronyc tracking         # Frequency: X.XXX ppm = crystal correction
+```
+
+See [doc/rtl_dab_time.md](doc/rtl_dab_time.md#chrony-refclock-mode--s) for
+detailed step-by-step Raspberry Pi installation and troubleshooting.
 
 ---
 
