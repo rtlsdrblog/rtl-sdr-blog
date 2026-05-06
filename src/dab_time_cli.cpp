@@ -277,9 +277,15 @@ int main(int argc, char** argv)
         }
     }
 
-    /* Continuous discipline loop */
+    /* Continuous discipline loop with averaging */
     {
         fprintf(stderr, "Locked to %s, disciplining clock...\n", active_channel.c_str());
+
+        #define AVG_WINDOW 10
+        long offset_history[AVG_WINDOW];
+        int offset_count = 0;
+        int offset_idx = 0;
+        int first_step_done = 0;
 
         while (running) {
             {
@@ -287,9 +293,89 @@ int main(int argc, char** argv)
                 time_received = false;
                 time_cv.wait(lock, [] { return time_received || !running; });
             }
-            if (time_received && running) {
-                apply_time(received_time, reception_time, step_only);
+            if (!time_received || !running) continue;
+
+            /* Compute offset */
+            struct tm tm_dab = {};
+            tm_dab.tm_year = received_time.year - 1900;
+            tm_dab.tm_mon = received_time.month - 1;
+            tm_dab.tm_mday = received_time.day;
+            tm_dab.tm_hour = received_time.hour;
+            tm_dab.tm_min = received_time.minutes;
+            tm_dab.tm_sec = received_time.seconds;
+
+            struct timespec ts_dab;
+            ts_dab.tv_sec = timegm(&tm_dab);
+            ts_dab.tv_nsec = (long)received_time.milliseconds * 1000000L;
+
+            struct timespec mono_now, real_now;
+            clock_gettime(CLOCK_MONOTONIC, &mono_now);
+            clock_gettime(CLOCK_REALTIME, &real_now);
+
+            long elapsed_ns = (mono_now.tv_sec - reception_time.tv_sec) * 1000000000L
+                            + (mono_now.tv_nsec - reception_time.tv_nsec);
+
+            struct timespec sys_at_rx;
+            sys_at_rx.tv_sec = real_now.tv_sec;
+            sys_at_rx.tv_nsec = real_now.tv_nsec - elapsed_ns;
+            while (sys_at_rx.tv_nsec < 0) { sys_at_rx.tv_sec--; sys_at_rx.tv_nsec += 1000000000L; }
+
+            long offset_us = (ts_dab.tv_sec - sys_at_rx.tv_sec) * 1000000L
+                           + (ts_dab.tv_nsec - sys_at_rx.tv_nsec) / 1000L;
+
+            /* First large offset: step immediately */
+            if (!first_step_done && labs(offset_us) > 500000) {
+                struct timespec ts_set;
+                ts_set.tv_sec = ts_dab.tv_sec;
+                ts_set.tv_nsec = ts_dab.tv_nsec + elapsed_ns;
+                while (ts_set.tv_nsec >= 1000000000L) { ts_set.tv_sec++; ts_set.tv_nsec -= 1000000000L; }
+                clock_settime(CLOCK_REALTIME, &ts_set);
+                fprintf(stderr, "DAB time: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC\n",
+                    received_time.year, received_time.month, received_time.day,
+                    received_time.hour, received_time.minutes, received_time.seconds,
+                    received_time.milliseconds);
+                fprintf(stderr, "Clock stepped by %+ld µs\n", offset_us);
+                first_step_done = 1;
+                offset_count = 0;
+                offset_idx = 0;
                 if (one_shot) break;
+                continue;
+            }
+            first_step_done = 1;
+
+            /* Accumulate offset measurements */
+            offset_history[offset_idx] = offset_us;
+            offset_idx = (offset_idx + 1) % AVG_WINDOW;
+            if (offset_count < AVG_WINDOW) offset_count++;
+
+            /* Apply correction only when we have enough samples */
+            if (offset_count >= AVG_WINDOW) {
+                /* Compute median (sort and take middle) */
+                long sorted[AVG_WINDOW];
+                memcpy(sorted, offset_history, sizeof(sorted));
+                int a, b;
+                for (a = 0; a < AVG_WINDOW - 1; a++)
+                    for (b = a + 1; b < AVG_WINDOW; b++)
+                        if (sorted[a] > sorted[b]) { long t = sorted[a]; sorted[a] = sorted[b]; sorted[b] = t; }
+                long median_offset = sorted[AVG_WINDOW / 2];
+
+                fprintf(stderr, "DAB time: %02d:%02d:%02d.%03d | offset: %+ld µs | median(%d): %+ld µs",
+                    received_time.hour, received_time.minutes, received_time.seconds,
+                    received_time.milliseconds, offset_us, AVG_WINDOW, median_offset);
+
+                if (labs(median_offset) > 100) {
+                    struct timeval delta;
+                    delta.tv_sec = 0;
+                    delta.tv_usec = median_offset;
+                    adjtime(&delta, NULL);
+                    fprintf(stderr, " → slew %+ld µs\n", median_offset);
+                } else {
+                    fprintf(stderr, " → ok\n");
+                }
+            } else {
+                fprintf(stderr, "DAB time: %02d:%02d:%02d.%03d | offset: %+ld µs | collecting %d/%d\n",
+                    received_time.hour, received_time.minutes, received_time.seconds,
+                    received_time.milliseconds, offset_us, offset_count, AVG_WINDOW);
             }
         }
     }
