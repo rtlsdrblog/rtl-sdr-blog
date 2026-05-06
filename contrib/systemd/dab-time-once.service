@@ -1,0 +1,16 @@
+[Unit]
+Description=DAB Time One-Shot (set clock at boot)
+Documentation=man:dab_time_cli(1)
+After=local-fs.target
+Before=time-sync.target
+Wants=time-sync.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dab_time_cli -c 12C -1
+TimeoutStartSec=120
+# Required for clock_settime
+AmbientCapabilities=CAP_SYS_TIME
+
+[Install]
+WantedBy=sysinit.target

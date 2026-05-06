@@ -1,0 +1,20 @@
+[Unit]
+Description=DAB Time Synchronization (NTP replacement)
+Documentation=man:dab_time_cli(1)
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dab_time_cli -c 12C
+Restart=on-failure
+RestartSec=10
+# Required for clock_settime/adjtimex
+AmbientCapabilities=CAP_SYS_TIME
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
