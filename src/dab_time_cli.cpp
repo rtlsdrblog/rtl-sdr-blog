@@ -29,6 +29,7 @@ static std::mutex time_mutex;
 static std::condition_variable time_cv;
 static bool time_received = false;
 static dab_date_time_t received_time;
+static struct timespec reception_time;  /* CLOCK_MONOTONIC at frame arrival */
 
 class TimeReceiver : public RadioControllerInterface {
 public:
@@ -40,8 +41,11 @@ public:
     void onNewEnsemble(uint16_t) override {}
     void onSetEnsembleLabel(DabLabel&) override {}
     void onDateTimeUpdate(const dab_date_time_t& dt) override {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
         std::lock_guard<std::mutex> lock(time_mutex);
         received_time = dt;
+        reception_time = now;
         time_received = true;
         time_cv.notify_one();
     }
@@ -88,7 +92,7 @@ static bool try_channel(CVirtualInput& input, RadioReceiver& rx,
            && time_received;
 }
 
-static void apply_time(const dab_date_time_t& t, bool step_only)
+static void apply_time(const dab_date_time_t& t, const struct timespec& rx_mono, bool step_only)
 {
     struct tm tm_dab = {};
     tm_dab.tm_year = t.year - 1900;
@@ -98,20 +102,41 @@ static void apply_time(const dab_date_time_t& t, bool step_only)
     tm_dab.tm_min = t.minutes;
     tm_dab.tm_sec = t.seconds;
 
-    struct timespec ts_dab, ts_now;
+    struct timespec ts_dab;
     ts_dab.tv_sec = timegm(&tm_dab);
     ts_dab.tv_nsec = (long)t.milliseconds * 1000000L;
 
-    clock_gettime(CLOCK_REALTIME, &ts_now);
-    long offset_us = (ts_dab.tv_sec - ts_now.tv_sec) * 1000000L
-                   + (ts_dab.tv_nsec - ts_now.tv_nsec) / 1000L;
+    /* Get system time at the same instant as reception (using monotonic delta) */
+    struct timespec mono_now, real_now;
+    clock_gettime(CLOCK_MONOTONIC, &mono_now);
+    clock_gettime(CLOCK_REALTIME, &real_now);
+
+    /* How much time elapsed since frame was received */
+    long elapsed_ns = (mono_now.tv_sec - rx_mono.tv_sec) * 1000000000L
+                    + (mono_now.tv_nsec - rx_mono.tv_nsec);
+
+    /* System realtime at the moment the frame arrived */
+    struct timespec sys_at_rx;
+    sys_at_rx.tv_sec = real_now.tv_sec;
+    sys_at_rx.tv_nsec = real_now.tv_nsec - elapsed_ns;
+    while (sys_at_rx.tv_nsec < 0) { sys_at_rx.tv_sec--; sys_at_rx.tv_nsec += 1000000000L; }
+
+    /* Offset = DAB time - system time at reception */
+    long offset_us = (ts_dab.tv_sec - sys_at_rx.tv_sec) * 1000000L
+                   + (ts_dab.tv_nsec - sys_at_rx.tv_nsec) / 1000L;
 
     fprintf(stderr, "DAB time: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC\n",
         t.year, t.month, t.day, t.hour, t.minutes, t.seconds, t.milliseconds);
-    fprintf(stderr, "System offset: %+ld µs\n", offset_us);
+    fprintf(stderr, "System offset: %+ld µs (processing delay: %ld µs)\n",
+        offset_us, elapsed_ns / 1000);
 
     if (step_only || labs(offset_us) > 500000) {
-        if (clock_settime(CLOCK_REALTIME, &ts_dab) == 0)
+        /* Step: set clock to DAB time + elapsed since reception */
+        struct timespec ts_set;
+        ts_set.tv_sec = ts_dab.tv_sec;
+        ts_set.tv_nsec = ts_dab.tv_nsec + elapsed_ns;
+        while (ts_set.tv_nsec >= 1000000000L) { ts_set.tv_sec++; ts_set.tv_nsec -= 1000000000L; }
+        if (clock_settime(CLOCK_REALTIME, &ts_set) == 0)
             fprintf(stderr, "Clock stepped by %+ld µs\n", offset_us);
         else
             perror("clock_settime (need root/CAP_SYS_TIME?)");
@@ -239,7 +264,7 @@ int main(int argc, char** argv)
             if (try_channel(*input_ptr, rx, DAB_CHANNELS[i], 10)) {
                 fprintf(stderr, "TIME FOUND!\n");
                 active_channel = DAB_CHANNELS[i];
-                apply_time(received_time, step_only);
+                apply_time(received_time, reception_time, step_only);
                 if (one_shot) goto done;
                 break;
             }
@@ -262,7 +287,7 @@ int main(int argc, char** argv)
                 time_cv.wait(lock, [] { return time_received || !running; });
             }
             if (time_received && running) {
-                apply_time(received_time, step_only);
+                apply_time(received_time, reception_time, step_only);
                 if (one_shot) break;
             }
         }
