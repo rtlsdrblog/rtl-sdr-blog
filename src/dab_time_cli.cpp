@@ -39,7 +39,11 @@ public:
     void onServiceDetected(uint32_t) override {}
     void onNewEnsemble(uint16_t) override {}
     void onSetEnsembleLabel(DabLabel& label) override {
-        std::cerr << "Ensemble: " << label.utf8_label() << std::endl;
+        static bool printed = false;
+        if (!printed) {
+            std::cerr << "Ensemble: " << label.utf8_label() << std::endl;
+            printed = true;
+        }
     }
     void onDateTimeUpdate(const dab_date_time_t& dt) override {
         std::lock_guard<std::mutex> lock(time_mutex);
@@ -248,22 +252,15 @@ int main(int argc, char** argv)
 
     /* Continuous discipline loop */
     {
-        Channels ch;
-        int freq = ch.getFrequency(active_channel);
-        input_ptr->setFrequency(freq);
-        input_ptr->reset();
-        rx.restart(false);
-
         fprintf(stderr, "Locked to %s, disciplining clock...\n", active_channel.c_str());
 
         while (running) {
-            time_received = false;
             {
                 std::unique_lock<std::mutex> lock(time_mutex);
-                time_cv.wait_for(lock, std::chrono::seconds(10),
-                    [] { return time_received || !running; });
+                time_received = false;
+                time_cv.wait(lock, [] { return time_received || !running; });
             }
-            if (time_received) {
+            if (time_received && running) {
                 apply_time(received_time, step_only);
                 if (one_shot) break;
             }
