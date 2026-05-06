@@ -13,6 +13,7 @@ if(BUILD_DAB_TIME)
     file(GLOB WELLE_VARIOUS_SRC ${WELLE_DIR}/various/*.cpp)
     file(GLOB WELLE_FEC_SRC ${WELLE_DIR}/libs/fec/*.c)
     set(WELLE_INPUT_SRC
+        ${WELLE_DIR}/input/rtl_sdr.cpp
         ${WELLE_DIR}/input/rtl_tcp.cpp
         ${WELLE_DIR}/input/input_factory.cpp
         ${WELLE_DIR}/input/null_device.cpp
@@ -39,6 +40,7 @@ if(BUILD_DAB_TIME)
     target_link_libraries(dab_time_cli
         ${FFTW3F_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
+        rtlsdr
         m
     )
 
