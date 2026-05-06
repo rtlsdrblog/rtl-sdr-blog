@@ -1,17 +1,19 @@
 # Build dab_time_cli against welle.io submodule
-# Usage: mkdir build-dab && cd build-dab && cmake -DBUILD_DAB_TIME=ON .. && make dab_time_cli
 
 if(BUILD_DAB_TIME)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FFTW3F REQUIRED fftw3f)
     find_package(Threads REQUIRED)
 
-    # Collect welle.io sources (minimal set for FIC decode + rtl_tcp input)
     set(WELLE_DIR ${CMAKE_SOURCE_DIR}/lib/welle.io/src)
 
-    file(GLOB WELLE_BACKEND_SRC ${WELLE_DIR}/backend/*.cpp)
-    file(GLOB WELLE_VARIOUS_SRC ${WELLE_DIR}/various/*.cpp)
-    file(GLOB WELLE_FEC_SRC ${WELLE_DIR}/libs/fec/*.c)
+    file(GLOB WELLE_BACKEND_SRC "${WELLE_DIR}/backend/*.cpp")
+    file(GLOB WELLE_VARIOUS_SRC "${WELLE_DIR}/various/*.cpp")
+    set(WELLE_FEC_SRC
+        ${WELLE_DIR}/libs/fec/decode_rs_char.c
+        ${WELLE_DIR}/libs/fec/encode_rs_char.c
+        ${WELLE_DIR}/libs/fec/init_rs_char.c
+    )
     set(WELLE_INPUT_SRC
         ${WELLE_DIR}/input/rtl_sdr.cpp
         ${WELLE_DIR}/input/rtl_tcp.cpp
@@ -27,6 +29,10 @@ if(BUILD_DAB_TIME)
         ${WELLE_FEC_SRC}
         ${WELLE_INPUT_SRC}
     )
+
+    target_compile_definitions(dab_time_cli PRIVATE DABLIN_AAC_FAAD2 HAVE_RTLSDR)
+    set_target_properties(dab_time_cli PROPERTIES LINKER_LANGUAGE CXX)
+    target_compile_features(dab_time_cli PRIVATE cxx_std_14)
 
     target_include_directories(dab_time_cli PRIVATE
         ${WELLE_DIR}
@@ -44,26 +50,21 @@ if(BUILD_DAB_TIME)
         m
     )
 
-    # Optional: mpg123, faad, lame (for full welle.io, not needed for time-only)
+    # Audio codec libraries
     pkg_check_modules(MPG123 libmpg123)
-    pkg_check_modules(FAAD faad2)
-    find_library(LAME_LIB mp3lame)
-
     if(MPG123_FOUND)
         target_link_libraries(dab_time_cli ${MPG123_LIBRARIES})
-        target_include_directories(dab_time_cli PRIVATE ${MPG123_INCLUDE_DIRS})
     endif()
-    if(FAAD_FOUND)
-        target_link_libraries(dab_time_cli ${FAAD_LIBRARIES})
-    else()
-        # Try direct link
-        target_link_libraries(dab_time_cli faad)
+
+    find_library(FAAD_LIB faad)
+    if(FAAD_LIB)
+        target_link_libraries(dab_time_cli ${FAAD_LIB})
     endif()
+
+    find_library(LAME_LIB mp3lame)
     if(LAME_LIB)
         target_link_libraries(dab_time_cli ${LAME_LIB})
     endif()
-
-    target_compile_features(dab_time_cli PRIVATE cxx_std_14)
 
     install(TARGETS dab_time_cli DESTINATION bin)
 endif()
