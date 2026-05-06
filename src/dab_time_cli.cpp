@@ -38,13 +38,7 @@ public:
     void onSignalPresence(bool) override {}
     void onServiceDetected(uint32_t) override {}
     void onNewEnsemble(uint16_t) override {}
-    void onSetEnsembleLabel(DabLabel& label) override {
-        static bool printed = false;
-        if (!printed) {
-            std::cerr << "Ensemble: " << label.utf8_label() << std::endl;
-            printed = true;
-        }
-    }
+    void onSetEnsembleLabel(DabLabel&) override {}
     void onDateTimeUpdate(const dab_date_time_t& dt) override {
         std::lock_guard<std::mutex> lock(time_mutex);
         received_time = dt;
@@ -231,6 +225,13 @@ int main(int argc, char** argv)
     /* Find a channel with time */
     if (!channel.empty()) {
         active_channel = channel;
+        Channels ch;
+        int freq = ch.getFrequency(active_channel);
+        if (freq == 0) { fprintf(stderr, "Unknown channel: %s\n", active_channel.c_str()); return 1; }
+        input_ptr->setFrequency(freq);
+        input_ptr->reset();
+        rx.restart(false);
+        fprintf(stderr, "Tuned to %s, waiting for time...\n", active_channel.c_str());
     } else {
         fprintf(stderr, "Scanning DAB Band III...\n");
         for (int i = 0; DAB_CHANNELS[i] && running; i++) {
