@@ -98,6 +98,13 @@ static bool time_received = false;
 static dab_date_time_t received_time;
 static struct timespec reception_time;  /* CLOCK_MONOTONIC at frame arrival */
 
+static void shm_invalidate(struct shmTime *shm) {
+    if (!shm) return;
+    shm->valid = 0;
+    shm->count = 0;
+    __sync_synchronize();
+}
+
 class TimeReceiver : public RadioControllerInterface {
 public:
     void onSNR(float) override {}
@@ -128,6 +135,7 @@ public:
                 text2.find("unplugged") != std::string::npos ||
                 text.find("input not ok") != std::string::npos ||
                 text2.find("input not ok") != std::string::npos) {
+                shm_invalidate(shm_time);
                 _exit(1);
             }
         }
@@ -137,6 +145,7 @@ public:
 static void sighandler(int) {
     running = false;
     time_cv.notify_all();
+    shm_invalidate(shm_time);
     _exit(0);  /* Force exit - welle.io threads don't stop cleanly */
 }
 
@@ -398,6 +407,7 @@ int main(int argc, char** argv)
                         [] { return time_received || !running; })) {
                     /* No time sample for 10s — device likely disconnected */
                     fprintf(stderr, "No DAB time for 10s, exiting (USB disconnected?)\n");
+                    shm_invalidate(shm_time);
                     _exit(1);
                 }
             }
