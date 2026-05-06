@@ -61,6 +61,7 @@ public:
 static void sighandler(int) {
     running = false;
     time_cv.notify_all();
+    _exit(0);  /* Force exit - welle.io threads don't stop cleanly */
 }
 
 static const char* DAB_CHANNELS[] = {
@@ -221,43 +222,51 @@ int main(int argc, char** argv)
     RadioReceiver rx(controller, *input_ptr, rro);
 
     /* Main loop */
-    while (running) {
-        if (!channel.empty()) {
-            /* Single channel mode */
-            fprintf(stderr, "Tuning to channel %s...\n", channel.c_str());
-            if (try_channel(*input_ptr, rx, channel, 30)) {
+    std::string active_channel;
+
+    /* Find a channel with time */
+    if (!channel.empty()) {
+        active_channel = channel;
+    } else {
+        fprintf(stderr, "Scanning DAB Band III...\n");
+        for (int i = 0; DAB_CHANNELS[i] && running; i++) {
+            fprintf(stderr, "  %s... ", DAB_CHANNELS[i]);
+            if (try_channel(*input_ptr, rx, DAB_CHANNELS[i], 10)) {
+                fprintf(stderr, "TIME FOUND!\n");
+                active_channel = DAB_CHANNELS[i];
+                apply_time(received_time, step_only);
+                if (one_shot) goto done;
+                break;
+            }
+            fprintf(stderr, "no time\n");
+        }
+        if (active_channel.empty()) {
+            fprintf(stderr, "No DAB time source found.\n");
+            goto done;
+        }
+    }
+
+    /* Continuous discipline loop */
+    {
+        Channels ch;
+        int freq = ch.getFrequency(active_channel);
+        input_ptr->setFrequency(freq);
+        input_ptr->reset();
+        rx.restart(false);
+
+        fprintf(stderr, "Locked to %s, disciplining clock...\n", active_channel.c_str());
+
+        while (running) {
+            time_received = false;
+            {
+                std::unique_lock<std::mutex> lock(time_mutex);
+                time_cv.wait_for(lock, std::chrono::seconds(10),
+                    [] { return time_received || !running; });
+            }
+            if (time_received) {
                 apply_time(received_time, step_only);
                 if (one_shot) break;
-            } else if (running) {
-                fprintf(stderr, "No time on channel %s, retrying...\n", channel.c_str());
             }
-        } else {
-            /* Auto-scan mode */
-            fprintf(stderr, "Scanning DAB Band III...\n");
-            bool found = false;
-            for (int i = 0; DAB_CHANNELS[i] && running; i++) {
-                fprintf(stderr, "  %s... ", DAB_CHANNELS[i]);
-                if (try_channel(*input_ptr, rx, DAB_CHANNELS[i], 10)) {
-                    fprintf(stderr, "TIME FOUND!\n");
-                    apply_time(received_time, step_only);
-                    channel = DAB_CHANNELS[i];  /* Lock to this channel */
-                    found = true;
-                    if (one_shot) goto done;
-                    break;
-                } else {
-                    fprintf(stderr, "no time\n");
-                }
-            }
-            if (!found && running) {
-                fprintf(stderr, "No DAB time source found, rescanning in 30s...\n");
-                std::this_thread::sleep_for(std::chrono::seconds(30));
-            }
-        }
-
-        if (!one_shot && running) {
-            /* Wait before next update */
-            std::this_thread::sleep_for(std::chrono::seconds(60));
-            time_received = false;
         }
     }
 
