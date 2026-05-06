@@ -195,6 +195,13 @@ static void apply_time(const dab_date_time_t& t, const struct timespec& rx_mono,
     /* Feed SHM refclock if enabled */
     shm_feed(shm_time, ts_dab, sys_at_rx);
 
+    /* In SHM mode, don't touch the clock — chrony handles discipline */
+    if (shm_time) {
+        fprintf(stderr, "DAB time: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC (offset: %+ld µs → SHM)\n",
+            t.year, t.month, t.day, t.hour, t.minutes, t.seconds, t.milliseconds, offset_us);
+        return;
+    }
+
     fprintf(stderr, "DAB time: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC\n",
         t.year, t.month, t.day, t.hour, t.minutes, t.seconds, t.milliseconds);
     fprintf(stderr, "System offset: %+ld µs (processing delay: %ld µs)\n",
@@ -414,6 +421,14 @@ int main(int argc, char** argv)
 
             /* Feed SHM refclock on every sample */
             shm_feed(shm_time, ts_dab, sys_at_rx);
+
+            /* In SHM mode, chrony handles all clock discipline */
+            if (shm_time) {
+                fprintf(stderr, "DAB time: %02d:%02d:%02d.%03d | offset: %+ld µs → SHM\n",
+                    received_time.hour, received_time.minutes, received_time.seconds,
+                    received_time.milliseconds, offset_us);
+                continue;
+            }
 
             /* First large offset: step immediately */
             if (!first_step_done && labs(offset_us) > 500000) {
