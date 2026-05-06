@@ -11,6 +11,7 @@
 #include <iostream>
 #include <cstring>
 #include <ctime>
+#include <sys/time.h>
 #include <csignal>
 #include <atomic>
 #include <mutex>
@@ -140,17 +141,17 @@ static void apply_time(const dab_date_time_t& t, const struct timespec& rx_mono,
             fprintf(stderr, "Clock stepped by %+ld µs\n", offset_us);
         else
             perror("clock_settime (need root/CAP_SYS_TIME?)");
-    } else if (labs(offset_us) > 1000) {
-        struct timex tx = {};
-        tx.modes = ADJ_OFFSET | ADJ_STATUS;
-        tx.offset = offset_us;
-        tx.status = STA_PLL;
-        if (adjtimex(&tx) >= 0)
+    } else if (labs(offset_us) > 200) {
+        /* Use adjtime-style single-shot slew for small offsets */
+        struct timeval delta;
+        delta.tv_sec = 0;
+        delta.tv_usec = offset_us;
+        if (adjtime(&delta, NULL) == 0)
             fprintf(stderr, "Clock slewed by %+ld µs\n", offset_us);
         else
-            perror("adjtimex");
+            perror("adjtime");
     } else {
-        fprintf(stderr, "Clock within 1ms, no adjustment\n");
+        fprintf(stderr, "Clock within 200µs, no adjustment\n");
     }
 }
 
