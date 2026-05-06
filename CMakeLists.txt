@@ -25,7 +25,7 @@ cmake_minimum_required(VERSION 3.7.2)
 if(${CMAKE_VERSION} VERSION_LESS "3.12.0")
     project(rtlsdr)
 else()
-    project(rtlsdr C)
+    project(rtlsdr C CXX)
 endif()
 
 #select the release build type by default to get optimization flags
