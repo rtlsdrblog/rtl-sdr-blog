@@ -135,15 +135,15 @@ int main(int argc, char** argv)
 
     struct timespec ts_dab, ts_now;
     ts_dab.tv_sec = timegm(&tm_dab);
-    ts_dab.tv_nsec = 0;
+    ts_dab.tv_nsec = (long)received_time.milliseconds * 1000000L;
 
     clock_gettime(CLOCK_REALTIME, &ts_now);
     long offset_us = (ts_dab.tv_sec - ts_now.tv_sec) * 1000000L
                    + (ts_dab.tv_nsec - ts_now.tv_nsec) / 1000L;
 
-    fprintf(stderr, "DAB time: %04d-%02d-%02d %02d:%02d:%02d UTC (offset: %+ld µs)\n",
+    fprintf(stderr, "DAB time: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC (offset: %+ld µs)\n",
         received_time.year, received_time.month, received_time.day,
-        received_time.hour, received_time.minutes, received_time.seconds, offset_us);
+        received_time.hour, received_time.minutes, received_time.seconds, received_time.milliseconds, offset_us);
 
     if (step_only || labs(offset_us) > 500000) {
         if (clock_settime(CLOCK_REALTIME, &ts_dab) == 0)
