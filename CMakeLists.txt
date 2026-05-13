@@ -25,7 +25,7 @@ cmake_minimum_required(VERSION 3.7.2)
 if(${CMAKE_VERSION} VERSION_LESS "3.12.0")
     project(rtlsdr)
 else()
-    project(rtlsdr C)
+    project(rtlsdr C CXX)
 endif()
 
 #select the release build type by default to get optimization flags
@@ -216,3 +216,7 @@ install(
 ########################################################################
 MESSAGE(STATUS "Building for version: ${VERSION} / ${LIBVER}")
 MESSAGE(STATUS "Using install prefix: ${CMAKE_INSTALL_PREFIX}")
+
+# DAB time tool (requires welle.io submodule)
+option(BUILD_DAB_TIME "Build dab_time_cli (requires fftw3f, mpg123, faad, lame)" OFF)
+include(cmake/DabTime.cmake)

@@ -1,0 +1,20 @@
+[Unit]
+Description=DAB Time SHM refclock for chrony
+Documentation=man:dab_time_cli(1)
+After=local-fs.target
+Before=chronyd.service
+Wants=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dab_time_cli -c 12C -S 2
+Restart=on-failure
+RestartSec=10
+# SHM creation requires running as root or same user as chrony
+AmbientCapabilities=CAP_SYS_TIME
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

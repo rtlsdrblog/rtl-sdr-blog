@@ -1,0 +1,19 @@
+# /etc/udev/rules.d/99-rtlsdr-dab.rules
+#
+# Start/stop dab-time-chrony service on RTL-SDR USB hotplug.
+# When dongle is inserted: start DAB time service → chrony uses DAB.
+# When dongle is removed: stop service → chrony falls back to NTP.
+#
+# Common RTL-SDR USB IDs:
+#   0bda:2832 - RTL2832U (generic)
+#   0bda:2838 - RTL2838 (RTL-SDR Blog v3/v4)
+#
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2838", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}="dab-time-chrony.service"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2832", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}="dab-time-chrony.service"
+
+ACTION=="remove", SUBSYSTEM=="usb", ENV{ID_VENDOR_ID}=="0bda", ENV{ID_MODEL_ID}=="2838", \
+    RUN+="/bin/systemctl stop dab-time-chrony.service"
+ACTION=="remove", SUBSYSTEM=="usb", ENV{ID_VENDOR_ID}=="0bda", ENV{ID_MODEL_ID}=="2832", \
+    RUN+="/bin/systemctl stop dab-time-chrony.service"

@@ -94,7 +94,10 @@ add_executable(rtl_eeprom rtl_eeprom.c)
 add_executable(rtl_adsb rtl_adsb.c)
 add_executable(rtl_power rtl_power.c)
 add_executable(rtl_biast rtl_biast.c)
-set(INSTALL_TARGETS rtlsdr rtlsdr_static rtl_sdr rtl_tcp rtl_test rtl_fm rtl_eeprom rtl_adsb rtl_power rtl_biast)
+add_executable(rtl_rds_time rtl_rds_time.c)
+add_executable(rtl_dab_time rtl_dab_time.c dab_time/ofdm.c dab_time/viterbi.c dab_time/fic.c)
+target_include_directories(rtl_dab_time PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set(INSTALL_TARGETS rtlsdr rtlsdr_static rtl_sdr rtl_tcp rtl_test rtl_fm rtl_eeprom rtl_adsb rtl_power rtl_biast rtl_rds_time rtl_dab_time)
 
 target_link_libraries(rtl_sdr rtlsdr convenience_static
     ${LIBUSB_LIBRARIES}
@@ -128,10 +131,20 @@ target_link_libraries(rtl_biast rtlsdr convenience_static
     ${LIBUSB_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
 )
+target_link_libraries(rtl_rds_time rtlsdr convenience_static
+    ${LIBUSB_LIBRARIES}
+    ${CMAKE_THREAD_LIBS_INIT}
+)
+target_link_libraries(rtl_dab_time rtlsdr convenience_static
+    ${LIBUSB_LIBRARIES}
+    ${CMAKE_THREAD_LIBS_INIT}
+)
 if(UNIX)
 target_link_libraries(rtl_fm m)
 target_link_libraries(rtl_adsb m)
 target_link_libraries(rtl_power m)
+target_link_libraries(rtl_rds_time m)
+target_link_libraries(rtl_dab_time m)
 if(APPLE OR CMAKE_SYSTEM MATCHES "OpenBSD")
     target_link_libraries(rtl_test m)
 else()
@@ -148,6 +161,7 @@ target_link_libraries(rtl_eeprom libgetopt_static)
 target_link_libraries(rtl_adsb libgetopt_static)
 target_link_libraries(rtl_power libgetopt_static)
 target_link_libraries(rtl_biast libgetopt_static)
+target_link_libraries(rtl_rds_time libgetopt_static)
 set_property(TARGET rtl_sdr APPEND PROPERTY COMPILE_DEFINITIONS "rtlsdr_STATIC" )
 set_property(TARGET rtl_tcp APPEND PROPERTY COMPILE_DEFINITIONS "rtlsdr_STATIC" )
 set_property(TARGET rtl_test APPEND PROPERTY COMPILE_DEFINITIONS "rtlsdr_STATIC" )
@@ -156,6 +170,7 @@ set_property(TARGET rtl_eeprom APPEND PROPERTY COMPILE_DEFINITIONS "rtlsdr_STATI
 set_property(TARGET rtl_adsb APPEND PROPERTY COMPILE_DEFINITIONS "rtlsdr_STATIC" )
 set_property(TARGET rtl_power APPEND PROPERTY COMPILE_DEFINITIONS "rtlsdr_STATIC" )
 set_property(TARGET rtl_biast APPEND PROPERTY COMPILE_DEFINITIONS "rtlsdr_STATIC" )
+set_property(TARGET rtl_rds_time APPEND PROPERTY COMPILE_DEFINITIONS "rtlsdr_STATIC" )
 endif()
 ########################################################################
 # Install built library files & utilities
@@ -166,6 +181,6 @@ install(TARGETS rtlsdr EXPORT RTLSDR-export
 install(TARGETS rtlsdr_static EXPORT RTLSDR-export
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # .so/.dylib file
   )
-install(TARGETS rtl_sdr rtl_tcp rtl_test rtl_fm rtl_eeprom rtl_adsb rtl_power rtl_biast
+install(TARGETS rtl_sdr rtl_tcp rtl_test rtl_fm rtl_eeprom rtl_adsb rtl_power rtl_biast rtl_rds_time rtl_dab_time
   DESTINATION ${CMAKE_INSTALL_BINDIR}
   )
