@@ -90,6 +90,16 @@ static struct llist *ll_buffers = 0;
 static int llbuf_num = DEFAULT_MAX_NUM_BUFFERS;
 
 static volatile int do_exit = 0;
+/* Set only by the OS signal handler (SIGINT/SIGTERM/...) to request a real
+ * program shutdown. This is kept separate from do_exit, which is also used
+ * internally to tear down a single client session. */
+static volatile int shutdown_requested = 0;
+/* -R: automatically recover when the device drops off the USB bus. */
+static int enable_reconnect = 0;
+/* Serial number and index of the device, used to find it again after a
+ * disconnect/reconnect (the USB index may change after re-enumeration). */
+static char dev_serial[256] = "";
+static int dev_index_global = 0;
 
 
 void usage(void)
@@ -106,6 +116,7 @@ void usage(void)
 	printf("\t[-P ppm_error (default: 0)]\n");
 	printf("\t[-T enable bias-T on GPIO PIN 0 (works for rtl-sdr.com v3/v4 dongles)]\n");
 	printf("\t[-D enable direct sampling (default: off)]\n");
+	printf("\t[-R automatically recover/reconnect if the device disconnects (e.g. power loss)]\n");
 	exit(1);
 }
 
@@ -136,6 +147,7 @@ sighandler(int signum)
 {
 	if (CTRL_C_EVENT == signum) {
 		fprintf(stderr, "Signal caught, exiting!\n");
+		shutdown_requested = 1;
 		do_exit = 1;
 		rtlsdr_cancel_async(dev);
 		return TRUE;
@@ -147,10 +159,25 @@ static void sighandler(int signum)
 {
 	signal(SIGPIPE, SIG_IGN);
 	fprintf(stderr, "Signal caught, exiting!\n");
-	rtlsdr_cancel_async(dev);
+	shutdown_requested = 1;
 	do_exit = 1;
+	rtlsdr_cancel_async(dev);
 }
 #endif
+
+/* Tear down the current client session without terminating the program.
+ * Called by the worker threads when the client goes away or the data stream
+ * stalls (which also happens when the device stops delivering samples). Unlike
+ * the signal handler, this does not set shutdown_requested, so the main loop
+ * can keep serving new clients (and, with -R, recover a lost device). */
+static void stop_session(void)
+{
+#ifndef _WIN32
+	signal(SIGPIPE, SIG_IGN);
+#endif
+	do_exit = 1;
+	rtlsdr_cancel_async(dev);
+}
 
 void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 {
@@ -219,7 +246,7 @@ static void *tcp_worker(void *arg)
 		if(r == ETIMEDOUT) {
 			pthread_mutex_unlock(&ll_mutex);
 			printf("worker cond timeout\n");
-			sighandler(0);
+			stop_session();
 			pthread_exit(NULL);
 		}
 
@@ -244,7 +271,7 @@ static void *tcp_worker(void *arg)
 				}
 				if(bytessent == SOCKET_ERROR || do_exit) {
 						printf("worker socket bye\n");
-						sighandler(0);
+						stop_session();
 						pthread_exit(NULL);
 				}
 			}
@@ -308,7 +335,7 @@ static void *command_worker(void *arg)
 			}
 			if(received == SOCKET_ERROR || do_exit) {
 				printf("comm recv bye\n");
-				sighandler(0);
+				stop_session();
 				pthread_exit(NULL);
 			}
 		}
@@ -377,6 +404,140 @@ static void *command_worker(void *arg)
 	}
 }
 
+/* Apply all device parameters. Used both at startup and when the device is
+ * re-opened after a disconnect, so a recovered session keeps the same
+ * configuration the user originally requested. */
+static void configure_device(rtlsdr_dev_t *_dev, int direct_sampling,
+			     int ppm_error, uint32_t samp_rate,
+			     uint32_t frequency, int gain, int biastee)
+{
+	int r;
+
+	/* Set direct sampling */
+	if (direct_sampling)
+		verbose_direct_sampling(_dev, 2);
+
+	/* Set the tuner error */
+	verbose_ppm_set(_dev, ppm_error);
+
+	/* Set the sample rate */
+	r = rtlsdr_set_sample_rate(_dev, samp_rate);
+	if (r < 0)
+		fprintf(stderr, "WARNING: Failed to set sample rate.\n");
+
+	/* Set the frequency */
+	r = rtlsdr_set_center_freq(_dev, frequency);
+	if (r < 0)
+		fprintf(stderr, "WARNING: Failed to set center freq.\n");
+	else
+		fprintf(stderr, "Tuned to %i Hz.\n", frequency);
+
+	if (0 == gain) {
+		/* Enable automatic gain */
+		r = rtlsdr_set_tuner_gain_mode(_dev, 0);
+		if (r < 0)
+			fprintf(stderr, "WARNING: Failed to enable automatic gain.\n");
+	} else {
+		/* Enable manual gain */
+		r = rtlsdr_set_tuner_gain_mode(_dev, 1);
+		if (r < 0)
+			fprintf(stderr, "WARNING: Failed to enable manual gain.\n");
+
+		/* Set the tuner gain */
+		r = rtlsdr_set_tuner_gain(_dev, gain);
+		if (r < 0)
+			fprintf(stderr, "WARNING: Failed to set tuner gain.\n");
+		else
+			fprintf(stderr, "Tuner gain set to %f dB.\n", gain/10.0);
+	}
+
+	rtlsdr_set_bias_tee(_dev, biastee);
+	if (biastee)
+		fprintf(stderr, "activated bias-T on GPIO PIN 0\n");
+
+	/* Reset endpoint before we start reading from it (mandatory) */
+	r = rtlsdr_reset_buffer(_dev);
+	if (r < 0)
+		fprintf(stderr, "WARNING: Failed to reset buffers.\n");
+}
+
+/* Report whether the open device still responds on the USB bus.
+ * Re-applies the current center frequency, which performs real USB control /
+ * I2C transfers and - crucially - returns a status we can check. We must NOT
+ * use rtlsdr_get_usb_strings() here: it reads the cached device descriptor and
+ * returns 0 even when the device is gone, producing a false "alive" result.
+ * A stale handle (dongle unplugged, or re-enumerated at a new address) makes
+ * these transfers fail with LIBUSB_ERROR_NO_DEVICE, which is exactly what we
+ * want to detect. Re-tuning to the same frequency changes no radio setting. */
+static int device_is_alive(void)
+{
+	if (!dev)
+		return 0;
+
+	return (rtlsdr_set_center_freq(dev, rtlsdr_get_center_freq(dev)) >= 0);
+}
+
+static void recovery_sleep(void)
+{
+#ifdef _WIN32
+	Sleep(5000);
+#else
+	usleep(5000000);
+#endif
+}
+
+/* Close the lost device and block until it (matched by serial number)
+ * re-appears on the USB bus, then re-open and re-configure it. Returns 0 once
+ * the device is back and ready, or -1 if a shutdown was requested while
+ * waiting. */
+static int reconnect_device(int direct_sampling, int ppm_error,
+			    uint32_t samp_rate, uint32_t frequency,
+			    int gain, int biastee)
+{
+	int idx, r;
+
+	fprintf(stderr, "Device communication lost. Waiting for the device "
+			"to reconnect...\n");
+
+	if (dev) {
+		rtlsdr_close(dev);
+		dev = NULL;
+	}
+
+	while (!shutdown_requested) {
+		if (dev_serial[0] != '\0') {
+			idx = rtlsdr_get_index_by_serial(dev_serial);
+		} else {
+			/* No serial to match on: fall back to the original
+			 * index if a device is present. */
+			idx = (rtlsdr_get_device_count() > 0) ?
+				dev_index_global : -1;
+		}
+
+		if (idx >= 0) {
+			r = rtlsdr_open(&dev, (uint32_t)idx);
+			if (0 == r && dev != NULL) {
+				fprintf(stderr, "Device reconnected (index %d%s%s)."
+					" Reinitializing...\n", idx,
+					dev_serial[0] ? ", serial " : "",
+					dev_serial[0] ? dev_serial : "");
+				configure_device(dev, direct_sampling, ppm_error,
+						 samp_rate, frequency, gain,
+						 biastee);
+				return 0;
+			}
+			if (dev) {
+				rtlsdr_close(dev);
+				dev = NULL;
+			}
+		}
+
+		recovery_sleep();
+	}
+
+	return -1;
+}
+
 int main(int argc, char **argv)
 {
 	int r, opt, i;
@@ -415,7 +576,12 @@ int main(int argc, char **argv)
 	struct sigaction sigact, sigign;
 #endif
 
-	while ((opt = getopt(argc, argv, "a:p:f:g:s:b:n:d:P:TD")) != -1) {
+	/* Line-buffer stdout so log messages appear in real time under systemd
+	 * (otherwise printf() output is block-buffered and only flushed in bursts,
+	 * e.g. when the service stops, which makes the logs very hard to read). */
+	setvbuf(stdout, NULL, _IOLBF, 0);
+
+	while ((opt = getopt(argc, argv, "a:p:f:g:s:b:n:d:P:TDR")) != -1) {
 		switch (opt) {
 		case 'd':
 			dev_index = verbose_device_search(optarg);
@@ -451,6 +617,9 @@ int main(int argc, char **argv)
 		case 'D':
 			direct_sampling = 1;
 			break;
+		case 'R':
+			enable_reconnect = 1;
+			break;
 		default:
 			usage();
 			break;
@@ -474,6 +643,12 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
+	/* Remember how to find this exact device again after a reconnect.
+	 * The serial survives re-enumeration (the USB index may not). */
+	dev_index_global = dev_index;
+	if (rtlsdr_get_usb_strings(dev, NULL, NULL, dev_serial) < 0)
+		dev_serial[0] = '\0';
+
 #ifndef _WIN32
 	sigact.sa_handler = sighandler;
 	sigemptyset(&sigact.sa_mask);
@@ -487,52 +662,8 @@ int main(int argc, char **argv)
 	SetConsoleCtrlHandler( (PHANDLER_ROUTINE) sighandler, TRUE );
 #endif
 
-	/* Set direct sampling */
-        if (direct_sampling)
-                verbose_direct_sampling(dev, 2);
-
-	/* Set the tuner error */
-	verbose_ppm_set(dev, ppm_error);
-
-	/* Set the sample rate */
-	r = rtlsdr_set_sample_rate(dev, samp_rate);
-	if (r < 0)
-		fprintf(stderr, "WARNING: Failed to set sample rate.\n");
-
-	/* Set the frequency */
-	r = rtlsdr_set_center_freq(dev, frequency);
-	if (r < 0)
-		fprintf(stderr, "WARNING: Failed to set center freq.\n");
-	else
-		fprintf(stderr, "Tuned to %i Hz.\n", frequency);
-
-	if (0 == gain) {
-		 /* Enable automatic gain */
-		r = rtlsdr_set_tuner_gain_mode(dev, 0);
-		if (r < 0)
-			fprintf(stderr, "WARNING: Failed to enable automatic gain.\n");
-	} else {
-		/* Enable manual gain */
-		r = rtlsdr_set_tuner_gain_mode(dev, 1);
-		if (r < 0)
-			fprintf(stderr, "WARNING: Failed to enable manual gain.\n");
-
-		/* Set the tuner gain */
-		r = rtlsdr_set_tuner_gain(dev, gain);
-		if (r < 0)
-			fprintf(stderr, "WARNING: Failed to set tuner gain.\n");
-		else
-			fprintf(stderr, "Tuner gain set to %f dB.\n", gain/10.0);
-	}
-
-	rtlsdr_set_bias_tee(dev, enable_biastee);
-	if (enable_biastee)
-		fprintf(stderr, "activated bias-T on GPIO PIN 0\n");
-
-	/* Reset endpoint before we start reading from it (mandatory) */
-	r = rtlsdr_reset_buffer(dev);
-	if (r < 0)
-		fprintf(stderr, "WARNING: Failed to reset buffers.\n");
+	configure_device(dev, direct_sampling, ppm_error, samp_rate, frequency,
+			 gain, enable_biastee);
 
 	pthread_mutex_init(&exit_cond_lock, NULL);
 	pthread_mutex_init(&ll_mutex, NULL);
@@ -599,9 +730,16 @@ int main(int argc, char **argv)
 			tv.tv_sec = 1;
 			tv.tv_usec = 0;
 			r = select(listensocket+1, &readfds, NULL, NULL, &tv);
-			if(do_exit) {
+			if(shutdown_requested) {
 				goto out;
-			} else if(r) {
+			}
+
+			if (enable_reconnect && !shutdown_requested && dev && !device_is_alive()) {
+				if (reconnect_device(direct_sampling, ppm_error, samp_rate, frequency, gain, enable_biastee) < 0)
+					goto out;
+			}
+
+			else if(r) {
 				rlen = sizeof(remote);
 				s = accept(listensocket,(struct sockaddr *)&remote, &rlen);
 				break;
@@ -656,10 +794,22 @@ int main(int argc, char **argv)
 
 		do_exit = 0;
 		global_numq = 0;
+
+		/* The session may have ended because the device dropped off the
+		 * USB bus (e.g. power loss to a self-powered hub). Without this
+		 * the loop would spin forever re-running rtlsdr_read_async() on a
+		 * dead handle (the "zombie" state). With -R, detect the loss and
+		 * wait for the dongle to come back, then re-open and continue. */
+		if (enable_reconnect && !shutdown_requested && !device_is_alive()) {
+			if (reconnect_device(direct_sampling, ppm_error, samp_rate,
+					     frequency, gain, enable_biastee) < 0)
+				goto out;
+		}
 	}
 
 out:
-	rtlsdr_close(dev);
+	if (dev)
+		rtlsdr_close(dev);
 	closesocket(listensocket);
 	closesocket(s);
 #ifdef _WIN32
