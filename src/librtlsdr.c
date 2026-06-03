@@ -1692,7 +1692,7 @@ found:
 	/* Hack to force the Bias T to always be on if we set the IR-Endpoint
 	* bit in the EEPROM to 0. Default on EEPROM is 1.
 	*/
-	r = rtlsdr_read_eeprom(dev, buf, 0, EEPROM_SIZE);
+	r = rtlsdr_read_eeprom(dev, &buf[7], 7, 1);
 	dev->force_bt = (buf[7] & 0x02) ? 0 : 1;
 	if(dev->force_bt)
 		rtlsdr_set_bias_tee(dev, 1);
