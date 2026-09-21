@@ -1105,9 +1105,57 @@ int rtlsdr_set_tuner_gain_mode(rtlsdr_dev_t *dev, int mode)
 		rtlsdr_set_i2c_repeater(dev, 1);
 		r = dev->tuner->set_gain_mode((void *)dev, mode);
 		/*rtlsdr_set_i2c_repeater(dev, 0);*/
+		if (!r && (dev->tuner_type == RTLSDR_TUNER_R820T ||
+		           dev->tuner_type == RTLSDR_TUNER_R828D))
+			dev->gain = 0;
 	}
 
 	return r;
+}
+
+static int rtlsdr_is_r82xx(rtlsdr_dev_t *dev)
+{
+	return dev && ((dev->tuner_type == RTLSDR_TUNER_R820T) ||
+		       (dev->tuner_type == RTLSDR_TUNER_R828D));
+}
+
+int rtlsdr_get_tuner_gain_stage_gains(rtlsdr_dev_t *dev, int stage, int *gains)
+{
+	if (!rtlsdr_is_r82xx(dev))
+		return -1;
+
+	return r82xx_get_gain_stage_gains(stage, gains);
+}
+
+int rtlsdr_set_tuner_gain_stage(rtlsdr_dev_t *dev, int stage, int gain)
+{
+	int r, lna, mixer;
+
+	if (!rtlsdr_is_r82xx(dev))
+		return -1;
+
+	rtlsdr_set_i2c_repeater(dev, 1);
+	r = r82xx_set_gain_stage(&dev->r82xx_p, stage, gain);
+	/*rtlsdr_set_i2c_repeater(dev, 0);*/
+	if (r)
+		return r;
+
+	/* Keep rtlsdr_get_tuner_gain() consistent with the range reported by
+	 * rtlsdr_get_tuner_gains(), which is the combined LNA + Mixer gain
+	 * (the VGA is not part of the combined gain table). */
+	lna = r82xx_get_gain_stage(&dev->r82xx_p, R82XX_GAIN_STAGE_LNA);
+	mixer = r82xx_get_gain_stage(&dev->r82xx_p, R82XX_GAIN_STAGE_MIXER);
+	dev->gain = (lna < 0 || mixer < 0) ? 0 : lna + mixer;
+
+	return r;
+}
+
+int rtlsdr_get_tuner_gain_stage(rtlsdr_dev_t *dev, int stage)
+{
+	if (!rtlsdr_is_r82xx(dev))
+		return -1;
+
+	return r82xx_get_gain_stage(&dev->r82xx_p, stage);
 }
 
 int rtlsdr_set_sample_rate(rtlsdr_dev_t *dev, uint32_t samp_rate)

@@ -112,10 +112,19 @@ enum r82xx_delivery_system {
 	SYS_ISDBT,
 };
 
+enum r82xx_gain_stage {
+	R82XX_GAIN_STAGE_LNA = 0,
+	R82XX_GAIN_STAGE_MIXER,
+	R82XX_GAIN_STAGE_VGA,
+};
+
 int r82xx_standby(struct r82xx_priv *priv);
 int r82xx_init(struct r82xx_priv *priv);
 int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq);
 int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain);
+int r82xx_get_gain_stage_gains(int stage, int *gains);
+int r82xx_set_gain_stage(struct r82xx_priv *priv, int stage, int gain);
+int r82xx_get_gain_stage(struct r82xx_priv *priv, int stage);
 int r82xx_set_bandwidth(struct r82xx_priv *priv, int bandwidth,  uint32_t rate);
 int r82xx_toggle_test(struct r82xx_priv *priv, int toggle);
 int r82xx_set_vga_gain(struct r82xx_priv *priv);

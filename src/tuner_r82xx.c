@@ -1032,6 +1032,129 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 	return 0;
 }
 
+static const int *r82xx_gain_stage_steps(int stage)
+{
+	switch (stage) {
+	case R82XX_GAIN_STAGE_LNA:
+		return r82xx_lna_gain_steps;
+	case R82XX_GAIN_STAGE_MIXER:
+		return r82xx_mixer_gain_steps;
+	case R82XX_GAIN_STAGE_VGA:
+		return r82xx_vga_gain_steps;
+	default:
+		return NULL;
+	}
+}
+
+/* Build the measured gain at each hardware index, in tenths of a dB.
+ *
+ * The last mixer step is negative, so its raw table would not be sorted.
+ * Clamp the cumulative values to be monotonically non-decreasing: the
+ * returned array is used to build gain ranges (e.g. osmosdr::gain_range_t)
+ * which require monotonic input, and the anomalous final step is not a
+ * useful gain setting anyway. */
+static int r82xx_gain_stage_table(int stage, int *table)
+{
+	const int *steps = r82xx_gain_stage_steps(stage);
+	int i, total = stage == R82XX_GAIN_STAGE_VGA ? VGA_BASE_GAIN : 0;
+
+	if (!steps)
+		return -1;
+
+	for (i = 0; i < 16; i++) {
+		total += steps[i];
+		if (i > 0 && total < table[i - 1])
+			total = table[i - 1];
+		table[i] = total;
+	}
+
+	return 16;
+}
+
+int r82xx_get_gain_stage_gains(int stage, int *gains)
+{
+	if (!r82xx_gain_stage_steps(stage))
+		return -1;
+
+	if (!gains)
+		return 16;
+
+	return r82xx_gain_stage_table(stage, gains);
+}
+
+int r82xx_set_gain_stage(struct r82xx_priv *priv, int stage, int gain)
+{
+	int table[16];
+	int i, index = 0;
+	int64_t best_diff, diff;
+	int rc;
+
+	if (r82xx_gain_stage_table(stage, table) < 0)
+		return -1;
+
+	/* snap to the step whose cumulative gain is closest to the request */
+	best_diff = (int64_t)table[0] - gain;
+	if (best_diff < 0)
+		best_diff = -best_diff;
+	for (i = 1; i < 16; i++) {
+		diff = (int64_t)table[i] - gain;
+		if (diff < 0)
+			diff = -diff;
+		if (diff < best_diff) {
+			best_diff = diff;
+			index = i;
+		}
+	}
+
+	switch (stage) {
+	case R82XX_GAIN_STAGE_LNA:
+		/* disable LNA AGC and set manual LNA gain index */
+		rc = r82xx_write_reg_mask(priv, 0x05, 0x10, 0x10);
+		if (rc < 0)
+			return rc;
+		return r82xx_write_reg_mask(priv, 0x05, index, 0x0f);
+	case R82XX_GAIN_STAGE_MIXER:
+		/* disable mixer AGC and set manual mixer gain index */
+		rc = r82xx_write_reg_mask(priv, 0x07, 0x00, 0x10);
+		if (rc < 0)
+			return rc;
+		return r82xx_write_reg_mask(priv, 0x07, index, 0x0f);
+	case R82XX_GAIN_STAGE_VGA:
+		return r82xx_write_reg_mask(priv, 0x0c, index, 0x9f);
+	}
+
+	return -1;
+}
+
+int r82xx_get_gain_stage(struct r82xx_priv *priv, int stage)
+{
+	int table[16];
+	int index;
+
+	if (r82xx_gain_stage_table(stage, table) < 0)
+		return -1;
+
+	switch (stage) {
+	case R82XX_GAIN_STAGE_LNA:
+		if (!(priv->regs[0x05 - REG_SHADOW_START] & 0x10))
+			return -1;
+		index = priv->regs[0x05 - REG_SHADOW_START] & 0x0f;
+		break;
+	case R82XX_GAIN_STAGE_MIXER:
+		if (priv->regs[0x07 - REG_SHADOW_START] & 0x10)
+			return -1;
+		index = priv->regs[0x07 - REG_SHADOW_START] & 0x0f;
+		break;
+	case R82XX_GAIN_STAGE_VGA:
+		index = priv->regs[0x0c - REG_SHADOW_START] & 0x0f;
+		break;
+	default:
+		return -1;
+	}
+
+	return table[index];
+}
+
 int r82xx_set_vga_gain(struct r82xx_priv *priv) {
 
 	int rc;
