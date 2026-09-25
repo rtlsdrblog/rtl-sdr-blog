@@ -1721,8 +1721,20 @@ err:
 
 int rtlsdr_close(rtlsdr_dev_t *dev)
 {
+	unsigned char probe[2];
+
 	if (!dev)
 		return -1;
+
+	/* An unplugged device is not always reported before we get here:
+	 * libusb on macOS keeps the event loop quiet, so dev_lost stays 0.
+	 * Ask the device once; if it is gone, skip the deinit, whose every
+	 * register write would fail with LIBUSB_ERROR_NO_DEVICE. */
+	if (!dev->dev_lost &&
+	    libusb_control_transfer(dev->devh, CTRL_IN, 0, USB_SYSCTL,
+				    USBB << 8, probe, 1, CTRL_TIMEOUT)
+	    == LIBUSB_ERROR_NO_DEVICE)
+		dev->dev_lost = 1;
 
 	if(!dev->dev_lost) {
 		/* block until all async operations have been completed (if any) */
