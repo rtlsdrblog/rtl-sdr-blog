@@ -27,11 +27,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-#ifdef __APPLE__
-#include <sys/time.h>
-#else
 #include <time.h>
-#endif
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -155,16 +151,13 @@ static int ppm_gettime(struct time_generic *tg)
 	int rv = ENOSYS;
 	struct timespec ts;
 
-#ifdef __unix__
+#if defined(__unix__) || defined(__APPLE__)
+	/* macOS does not define __unix__; it has had clock_gettime()
+	 * since 10.12, so use the same monotonic clock as Linux instead
+	 * of the wall clock, which NTP can step or slew mid-measurement. */
 	rv = clock_gettime(CLOCK_MONOTONIC, &ts);
 	tg->tv_sec = ts.tv_sec;
 	tg->tv_nsec = ts.tv_nsec;
-#elif __APPLE__
-	struct timeval tv;
-
-	rv = gettimeofday(&tv, NULL);
-	tg->tv_sec = tv.tv_sec;
-	tg->tv_nsec = tv.tv_usec * 1000;
 #endif
 	return rv;
 }
