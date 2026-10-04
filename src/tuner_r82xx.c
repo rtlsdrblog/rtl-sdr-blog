@@ -1022,8 +1022,8 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 		if (rc < 0)
 			return rc;
 
-		/* set fixed VGA gain for now (26.5 dB) */
-		rc = r82xx_write_reg_mask(priv, 0x0c, 0x0b, 0x9f);
+		/* Use the same fixed VGA policy as manual gain and retuning. */
+		rc = r82xx_set_vga_gain(priv);
 
 		if (rc < 0)
 			return rc;
