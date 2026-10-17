@@ -154,7 +154,14 @@ static void sighandler(int signum)
 
 void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 {
-	if(!do_exit) {
+	/* A client that disconnects before rtlsdr_read_async() has started makes its worker
+	 * call rtlsdr_cancel_async() too early (a no-op), so read_async would run forever and
+	 * the server never accepts again: cancel from here once the session is over. */
+	if(do_exit) {
+		rtlsdr_cancel_async(dev);
+		return;
+	}
+	{
 		struct llist *rpt = (struct llist*)malloc(sizeof(struct llist));
 		rpt->data = (char*)malloc(len);
 		memcpy(rpt->data, buf, len);
@@ -237,12 +244,14 @@ static void *tcp_worker(void *arg)
 				tv.tv_sec = 1;
 				tv.tv_usec = 0;
 				r = select(s+1, NULL, &writefds, NULL, &tv);
-				if(r) {
+				if(r > 0) {
 					bytessent = send(s,  &curelem->data[index], bytesleft, 0);
-					bytesleft -= bytessent;
-					index += bytessent;
+					if(bytessent > 0) {
+						bytesleft -= bytessent;
+						index += bytessent;
+					}
 				}
-				if(bytessent == SOCKET_ERROR || do_exit) {
+				if(r < 0 || bytessent == SOCKET_ERROR || do_exit) {
 						printf("worker socket bye\n");
 						sighandler(0);
 						pthread_exit(NULL);
@@ -304,9 +313,11 @@ static void *command_worker(void *arg)
 			r = select(s+1, &readfds, NULL, NULL, &tv);
 			if(r) {
 				received = recv(s, (char*)&cmd+(sizeof(cmd)-left), left, 0);
-				left -= received;
+				if(received > 0)
+					left -= received;
 			}
-			if(received == SOCKET_ERROR || do_exit) {
+			/* recv() == 0: the client closed the connection */
+			if((r && received <= 0) || r < 0 || do_exit) {
 				printf("comm recv bye\n");
 				sighandler(0);
 				pthread_exit(NULL);
