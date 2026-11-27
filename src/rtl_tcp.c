@@ -245,6 +245,13 @@ static void *tcp_worker(void *arg)
 				if(bytessent == SOCKET_ERROR || do_exit) {
 						printf("worker socket bye\n");
 						sighandler(0);
+						/* Buffers taken from ll_buffers are no longer reachable for main */
+						while(curelem != 0) {
+							prev = curelem;
+							curelem = curelem->next;
+							free(prev->data);
+							free(prev);
+						}
 						pthread_exit(NULL);
 				}
 			}
